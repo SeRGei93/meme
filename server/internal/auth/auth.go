@@ -47,6 +47,12 @@ type Client struct {
 	RevokedAt  *time.Time
 }
 
+// Source returns the knowledge source recorded for this client. The token
+// resolves to the client, so callers never take the source from a request body.
+func (c Client) Source() (string, bool) {
+	return c.Kind.Source()
+}
+
 // Principal is an authenticated caller. Client is nil for the bootstrap admin.
 type Principal struct {
 	Client    *Client

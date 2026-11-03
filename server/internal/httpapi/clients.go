@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
-const maxBodyBytes = 10 << 20 // 10 MiB, from the v1 contract.
+const (
+	maxBodyBytes = 10 << 20 // 10 MiB, from the v1 contract.
+	clientsPath  = "/api/v1/clients"
+)
 
 type createClientRequest struct {
 	Name   string       `json:"name"`
@@ -27,6 +31,10 @@ type createClientResponse struct {
 	Token  string         `json:"token"`
 }
 
+type clientListResponse struct {
+	Items []clientResponse `json:"items"`
+}
+
 type clientResponse struct {
 	ID         int64        `json:"id"`
 	Name       string       `json:"name"`
@@ -36,6 +44,55 @@ type clientResponse struct {
 	CreatedAt  time.Time    `json:"created_at"`
 	LastSeenAt *time.Time   `json:"last_seen_at"`
 	RevokedAt  *time.Time   `json:"revoked_at"`
+}
+
+func (s *server) handleListClients(w http.ResponseWriter, r *http.Request) {
+	clients, err := s.store.ListClients(r.Context())
+	if err != nil {
+		s.logger.Error("list clients",
+			"error", err,
+			"request_id", requestIDFrom(r.Context()),
+		)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "internal server error", nil)
+		return
+	}
+
+	items := make([]clientResponse, 0, len(clients))
+	for _, client := range clients {
+		items = append(items, toClientResponse(client))
+	}
+	writeJSON(w, http.StatusOK, clientListResponse{Items: items})
+}
+
+func (s *server) handleRevokeClient(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimPrefix(r.URL.Path, clientsPath+"/")
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, r, http.StatusBadRequest, "invalid_request",
+			"client id must be a positive integer",
+			map[string]any{"field": "id"})
+		return
+	}
+
+	switch err := s.store.RevokeClient(r.Context(), id); {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "client not found", nil)
+		return
+	case err != nil:
+		s.logger.Error("revoke client",
+			"error", err,
+			"client_id", id,
+			"request_id", requestIDFrom(r.Context()),
+		)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "internal server error", nil)
+		return
+	}
+
+	s.logger.Info("client revoked",
+		"client_id", id,
+		"request_id", requestIDFrom(r.Context()),
+	)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +224,7 @@ func toClientResponse(client auth.Client) clientResponse {
 	copy(scopes, client.Scopes)
 
 	var source *string
-	if value, ok := client.Kind.Source(); ok {
+	if value, ok := client.Source(); ok {
 		source = &value
 	}
 

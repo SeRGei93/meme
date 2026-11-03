@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -241,18 +242,171 @@ func TestAuthRequiresBearerToken(t *testing.T) {
 	}
 }
 
+type clientBody struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Kind       string     `json:"kind"`
+	Scopes     []string   `json:"scopes"`
+	Source     *string    `json:"source"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastSeenAt *time.Time `json:"last_seen_at"`
+	RevokedAt  *time.Time `json:"revoked_at"`
+}
+
 type createClientBody struct {
-	Client struct {
-		ID         int64      `json:"id"`
-		Name       string     `json:"name"`
-		Kind       string     `json:"kind"`
-		Scopes     []string   `json:"scopes"`
-		Source     *string    `json:"source"`
-		CreatedAt  time.Time  `json:"created_at"`
-		LastSeenAt *time.Time `json:"last_seen_at"`
-		RevokedAt  *time.Time `json:"revoked_at"`
-	} `json:"client"`
-	Token string `json:"token"`
+	Client clientBody `json:"client"`
+	Token  string     `json:"token"`
+}
+
+type clientListBody struct {
+	Items []clientBody `json:"items"`
+}
+
+func TestListClientsReturnsClientsWithoutTokens(t *testing.T) {
+	env := newTestEnv(t)
+	created := createClient(t, env, "opencode-macbook", "opencode", []string{"ingest"})
+
+	rec := env.do(t, http.MethodGet, "/api/v1/clients", testAdminToken, nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body clientListBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(body.Items))
+	}
+	got := body.Items[0]
+	if got.ID != created.Client.ID || got.Name != created.Client.Name || got.Kind != created.Client.Kind {
+		t.Errorf("items[0] = %+v, want created client %+v", got, created.Client)
+	}
+	if got.Source == nil || *got.Source != "opencode" {
+		t.Errorf("items[0].source = %v, want opencode", got.Source)
+	}
+	if strings.Contains(rec.Body.String(), created.Token) ||
+		strings.Contains(rec.Body.String(), "token_hash") ||
+		strings.Contains(rec.Body.String(), `"token"`) {
+		t.Error("list response exposes token material")
+	}
+}
+
+func TestRevokeClientIsImmediateAndIdempotent(t *testing.T) {
+	env := newTestEnv(t)
+	created := createClient(t, env, "revocable", "ui", []string{"admin"})
+	clientPath := fmt.Sprintf("/api/v1/clients/%d", created.Client.ID)
+
+	rec := env.do(t, http.MethodDelete, clientPath, testAdminToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("first delete: status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("first delete: body = %q, want empty", rec.Body.String())
+	}
+
+	rec = env.do(t, http.MethodGet, "/api/v1/clients", created.Token, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token: status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	rec = env.do(t, http.MethodGet, "/api/v1/clients", testAdminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list clients: status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var list clientListBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(list.Items))
+	}
+	if list.Items[0].RevokedAt == nil {
+		t.Error("items[0].revoked_at = nil, want a revocation timestamp")
+	}
+
+	rec = env.do(t, http.MethodDelete, clientPath, testAdminToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("second delete: status = %d, want 204 (idempotent)", rec.Code)
+	}
+
+	rec = env.do(t, http.MethodDelete, fmt.Sprintf("/api/v1/clients/%d", created.Client.ID+1000), testAdminToken, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete unknown: status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if code := decodeError(t, rec).Error.Code; code != "not_found" {
+		t.Errorf("delete unknown: code = %q, want not_found", code)
+	}
+
+	rec = env.do(t, http.MethodDelete, "/api/v1/clients/not-a-number", testAdminToken, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("delete invalid id: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	envelope := decodeError(t, rec)
+	if envelope.Error.Code != "invalid_request" {
+		t.Errorf("delete invalid id: code = %q, want invalid_request", envelope.Error.Code)
+	}
+	if field := envelope.Error.Details["field"]; field != "id" {
+		t.Errorf("delete invalid id: details.field = %v, want id", field)
+	}
+
+	for _, invalidPath := range []string{clientPath + "/extra", "/api/v1/clients/"} {
+		rec = env.do(t, http.MethodDelete, invalidPath, testAdminToken, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("delete %q: status = %d, want 404", invalidPath, rec.Code)
+		}
+	}
+}
+
+func TestRotateClientReusesNameAndInvalidatesOldToken(t *testing.T) {
+	env := newTestEnv(t)
+	adminToken := createClientToken(t, env, "admin-client", "admin", []string{"admin"})
+	old := createClient(t, env, "opencode-main", "opencode", []string{"ingest", "admin"})
+
+	rec := env.do(t, http.MethodDelete, fmt.Sprintf("/api/v1/clients/%d", old.Client.ID), adminToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke old client: status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	fresh := createClient(t, env, "opencode-main", "opencode", []string{"ingest", "admin"})
+	if fresh.Token == old.Token {
+		t.Error("rotated client received the same token as the revoked client")
+	}
+	if fresh.Client.ID == old.Client.ID {
+		t.Error("rotated client reused the revoked client id")
+	}
+
+	rec = env.do(t, http.MethodGet, "/api/v1/clients", old.Token, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("old token after rotation: status = %d, want 401", rec.Code)
+	}
+
+	rec = env.do(t, http.MethodGet, "/api/v1/clients", fresh.Token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new token after rotation: status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var list clientListBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	items := make(map[int64]clientBody, len(list.Items))
+	for _, item := range list.Items {
+		items[item.ID] = item
+	}
+	oldItem, ok := items[old.Client.ID]
+	if !ok {
+		t.Fatalf("list is missing revoked client %d", old.Client.ID)
+	}
+	if oldItem.RevokedAt == nil {
+		t.Error("old client revoked_at = nil, want a revocation timestamp")
+	}
+	freshItem, ok := items[fresh.Client.ID]
+	if !ok {
+		t.Fatalf("list is missing rotated client %d", fresh.Client.ID)
+	}
+	if freshItem.RevokedAt != nil {
+		t.Errorf("new client revoked_at = %v, want null", freshItem.RevokedAt)
+	}
 }
 
 func TestBootstrapAdminCreatesFirstClient(t *testing.T) {
@@ -297,6 +451,48 @@ func TestBootstrapAdminCreatesFirstClient(t *testing.T) {
 	}
 }
 
+func TestCreateClientDerivesSourceFromKindAndRejectsSourceField(t *testing.T) {
+	env := newTestEnv(t)
+
+	tests := []struct {
+		kind       string
+		wantSource string
+	}{
+		{"opencode", "opencode"},
+		{"jarvis", "jarvis"},
+		{"ui", ""},
+		{"admin", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			body := createClient(t, env, "source-"+tt.kind, tt.kind, []string{"ui"})
+			if tt.wantSource == "" {
+				if body.Client.Source != nil {
+					t.Errorf("client.source = %q, want null", *body.Client.Source)
+				}
+				return
+			}
+			if body.Client.Source == nil || *body.Client.Source != tt.wantSource {
+				t.Errorf("client.source = %v, want %q", body.Client.Source, tt.wantSource)
+			}
+		})
+	}
+
+	rec := env.do(t, http.MethodPost, "/api/v1/clients", testAdminToken, map[string]any{
+		"name": "spoofed-source", "kind": "ui", "scopes": []string{"ui"}, "source": "jarvis",
+	})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("source field: status = %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+	envelope := decodeError(t, rec)
+	if envelope.Error.Code != "validation_failed" {
+		t.Errorf("source field: code = %q, want validation_failed", envelope.Error.Code)
+	}
+	if field := envelope.Error.Details["field"]; field != "source" {
+		t.Errorf("source field: details.field = %v, want source", field)
+	}
+}
+
 func TestIssuedTokensAuthenticateAndScopesAreEnforced(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -326,6 +522,55 @@ func TestIssuedTokensAuthenticateAndScopesAreEnforced(t *testing.T) {
 	details, _ := envelope.Error.Details["required_any_of"].([]any)
 	if len(details) != 1 || details[0] != "admin" {
 		t.Errorf("details.required_any_of = %v, want [admin]", envelope.Error.Details["required_any_of"])
+	}
+}
+
+func TestClientEndpointsRejectTokensWithoutAdminScope(t *testing.T) {
+	env := newTestEnv(t)
+	uiToken := createClientToken(t, env, "ui-client", "ui", []string{"ui"})
+	target := createClient(t, env, "target", "ui", []string{"ui"})
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"list", http.MethodGet, "/api/v1/clients", nil},
+		{"create", http.MethodPost, "/api/v1/clients", map[string]any{
+			"name": "forbidden-create", "kind": "ui", "scopes": []string{"ui"},
+		}},
+		{"revoke", http.MethodDelete, fmt.Sprintf("/api/v1/clients/%d", target.Client.ID), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := env.do(t, tt.method, tt.path, uiToken, tt.body)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+			}
+			envelope := decodeError(t, rec)
+			if envelope.Error.Code != "forbidden" {
+				t.Errorf("code = %q, want forbidden", envelope.Error.Code)
+			}
+			required, _ := envelope.Error.Details["required_any_of"].([]any)
+			if len(required) != 1 || required[0] != "admin" {
+				t.Errorf("details.required_any_of = %v, want [admin]", envelope.Error.Details["required_any_of"])
+			}
+		})
+	}
+
+	rec := env.do(t, http.MethodGet, "/api/v1/clients", testAdminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list clients: status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var list clientListBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, item := range list.Items {
+		if item.ID == target.Client.ID && item.RevokedAt != nil {
+			t.Error("forbidden revoke request revoked the target client")
+		}
 	}
 }
 

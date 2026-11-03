@@ -123,6 +123,9 @@ func TestCreateClientReturnsTokenAndLookupByHashFindsIt(t *testing.T) {
 	if len(found.Scopes) != 1 || found.Scopes[0] != auth.ScopeIngest {
 		t.Errorf("found.Scopes = %v, want [ingest]", found.Scopes)
 	}
+	if source, ok := found.Source(); !ok || source != "opencode" {
+		t.Errorf("found.Source() = (%q, %v), want (opencode, true)", source, ok)
+	}
 
 	if _, err := st.FindClientByTokenHash(context.Background(), auth.HashToken("sb_ui_wrong")); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("FindClientByTokenHash(unknown) error = %v, want ErrNotFound", err)
@@ -138,6 +141,64 @@ func TestCreateClientRejectsDuplicateActiveName(t *testing.T) {
 	}
 	if _, _, err := st.CreateClient(ctx, "jarvis", auth.KindJarvis, []auth.Scope{auth.ScopeIngest}); !errors.Is(err, store.ErrClientNameTaken) {
 		t.Errorf("second CreateClient() error = %v, want ErrClientNameTaken", err)
+	}
+}
+
+func TestRevokeClientIsImmediateAndIdempotent(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	client, token, err := st.CreateClient(ctx, "revoked-client", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+	if _, err := st.FindClientByTokenHash(ctx, auth.HashToken(token)); err != nil {
+		t.Fatalf("FindClientByTokenHash() before revoke error = %v", err)
+	}
+
+	if err := st.RevokeClient(ctx, client.ID); err != nil {
+		t.Fatalf("RevokeClient() error = %v", err)
+	}
+	if _, err := st.FindClientByTokenHash(ctx, auth.HashToken(token)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("FindClientByTokenHash() after revoke error = %v, want ErrNotFound", err)
+	}
+
+	if err := st.RevokeClient(ctx, client.ID); err != nil {
+		t.Errorf("second RevokeClient() error = %v, want nil (idempotent)", err)
+	}
+	if err := st.RevokeClient(ctx, client.ID+1000); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("RevokeClient(unknown) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListClientsReturnsActiveAndRevokedWithoutTokenHashes(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	active, _, err := st.CreateClient(ctx, "active", auth.KindJarvis, []auth.Scope{auth.ScopeMCPRead})
+	if err != nil {
+		t.Fatalf("CreateClient(active) error = %v", err)
+	}
+	revoked, _, err := st.CreateClient(ctx, "revoked", auth.KindUI, []auth.Scope{auth.ScopeUI})
+	if err != nil {
+		t.Fatalf("CreateClient(revoked) error = %v", err)
+	}
+	if err := st.RevokeClient(ctx, revoked.ID); err != nil {
+		t.Fatalf("RevokeClient() error = %v", err)
+	}
+
+	clients, err := st.ListClients(ctx)
+	if err != nil {
+		t.Fatalf("ListClients() error = %v", err)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("len(clients) = %d, want 2", len(clients))
+	}
+	if clients[0].ID != active.ID || clients[0].RevokedAt != nil {
+		t.Errorf("clients[0] = %+v, want active client %d", clients[0], active.ID)
+	}
+	if clients[1].ID != revoked.ID || clients[1].RevokedAt == nil {
+		t.Errorf("clients[1] = %+v, want revoked client %d with revoked_at", clients[1], revoked.ID)
 	}
 }
 
