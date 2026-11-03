@@ -415,52 +415,57 @@ C4 Level 4 редко рисуют полностью, поэтому ниже �
 
 ## 6.1 Go-сервер
 
-```text
-cmd/brain/
-  main.go                  # serve, backup, restore, healthcheck
+> Целевая структура; пакеты добавляются по мере вех. На M1 реализованы `config`,
+> `httpapi`, `auth` и `store`.
 
-internal/
-  config/                  # env + config
-  httpapi/                 # REST handlers, middleware
-  mcp/                     # MCP tools
-  auth/                    # tokens, scopes, clients
-  ingest/                  # validation, idempotency, source resolution
-  queue/                   # job worker, retries, finalization
-  card/                    # prompt, LLM client, JSON validation, heuristic
-  mask/                    # secret masking
-  search/                  # FTS query builder, BM25, freshness
-  store/                   # SQLite, migrations, repositories, FTS triggers
-  graph/                   # links
-  finalizer/               # idle sessions -> final
-  backup/                  # VACUUM INTO, S3, rotation, restore
-  obs/                     # logging, health, metrics
+```text
+server/
+  cmd/brain/
+    main.go                # serve, healthcheck, later backup/restore
+  internal/
+    config/                # env + config
+    httpapi/               # REST handlers, middleware
+    mcp/                   # MCP tools
+    auth/                  # tokens, scopes, clients
+    ingest/                # validation, idempotency, source resolution
+    queue/                 # job worker, retries, finalization
+    card/                  # prompt, LLM client, JSON validation, heuristic
+    mask/                  # secret masking
+    search/                # FTS query builder, BM25, freshness
+    store/                 # SQLite, migrations, repositories, FTS triggers
+    graph/                 # links
+    finalizer/             # idle sessions -> final
+    backup/                # VACUUM INTO, S3, rotation, restore
+    obs/                   # logging, health, metrics
+  Dockerfile
 ```
 
 ## 6.2 SwiftUI-приложение
 
 ```text
-SecondBrain/
-  App/
-    SecondBrainApp.swift
-    AppState.swift
-    MenuBar.swift
-  Features/
-    Onboarding/
-    Dashboard/
-    Search/
-    Records/
-    Graph/
-    Projects/
-    Agents/
-    Settings/
-  Core/
-    APIClient.swift
-    KeychainStore.swift
-    SpoolWatcher.swift
-    UploadQueue.swift
-    ConfigStore.swift
-    PluginInstaller.swift
-    Models.swift
+app/
+  SecondBrain/
+    App/
+      SecondBrainApp.swift
+      AppState.swift
+      MenuBar.swift
+    Features/
+      Onboarding/
+      Dashboard/
+      Search/
+      Records/
+      Graph/
+      Projects/
+      Agents/
+      Settings/
+    Core/
+      APIClient.swift
+      KeychainStore.swift
+      SpoolWatcher.swift
+      UploadQueue.swift
+      ConfigStore.swift
+      PluginInstaller.swift
+      Models.swift
 ```
 
 ## 6.3 OpenCode plugin
@@ -730,14 +735,16 @@ PRAGMA busy_timeout = 5000;
 
 CREATE TABLE clients (
     id            INTEGER PRIMARY KEY,
-    name          TEXT NOT NULL UNIQUE,
-    kind          TEXT NOT NULL,          -- opencode | jarvis | ui | admin
-    token_hash    TEXT NOT NULL,
+    name          TEXT NOT NULL,          -- unique among non-revoked clients
+    kind          TEXT NOT NULL CHECK (kind IN ('opencode', 'jarvis', 'ui', 'admin')),
+    token_hash    TEXT NOT NULL UNIQUE,
     scopes        TEXT NOT NULL,          -- ingest,mcp:read,mcp:write,admin,ui
     created_at    TEXT NOT NULL,
     last_seen_at  TEXT,
     revoked_at    TEXT
 );
+
+CREATE UNIQUE INDEX clients_active_name ON clients(name) WHERE revoked_at IS NULL;
 
 CREATE TABLE projects (
     id          INTEGER PRIMARY KEY,

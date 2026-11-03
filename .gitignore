@@ -27,6 +27,7 @@ tmp/
 
 # Go
 /bin/
+/server/bin/
 /dist/
 *.test
 coverage.out

@@ -1,0 +1,156 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/SeRGei93/meme/server/internal/config"
+	"github.com/SeRGei93/meme/server/internal/httpapi"
+	"github.com/SeRGei93/meme/server/internal/store"
+)
+
+// version is set by the build via -ldflags.
+var version = "dev"
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
+	if err := run(os.Args[1:]); err != nil {
+		logger.Error("fatal", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	command := "serve"
+	if len(args) > 0 {
+		command = args[0]
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(args[1:], " "))
+	}
+
+	switch command {
+	case "serve":
+		return serve()
+	case "healthcheck":
+		return healthcheck()
+	case "help", "-h", "--help":
+		fmt.Fprintln(os.Stdout, "usage: brain [serve|healthcheck]")
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q (want serve or healthcheck)", command)
+	}
+}
+
+func serve() error {
+	logger := slog.Default()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			logger.Error("close store", "error", err)
+		}
+	}()
+
+	schemaVersion, err := st.SchemaVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	server := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           httpapi.New(httpapi.Options{Store: st, AdminToken: cfg.AdminToken, Version: version, Logger: logger}),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+	}
+
+	logger.Info("server starting",
+		"version", version,
+		"addr", cfg.Addr,
+		"db", cfg.DBPath,
+		"schema_version", schemaVersion,
+	)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
+		logger.Info("server stopping", "reason", ctx.Err().Error())
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown http server: %w", err)
+	}
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("http server: %w", err)
+	}
+
+	logger.Info("server stopped")
+	return nil
+}
+
+func healthcheck() error {
+	url := healthcheckURL(os.Getenv)
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("healthcheck: %s returned %d", url, response.StatusCode)
+	}
+	return nil
+}
+
+func healthcheckURL(getenv func(string) string) string {
+	addr := strings.TrimSpace(getenv("BRAIN_ADDR"))
+	if addr == "" {
+		addr = ":8080"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host, port = "", "8080"
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/health"
+}

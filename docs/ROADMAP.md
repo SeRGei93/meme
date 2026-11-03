@@ -39,7 +39,7 @@
 
 ### Xcode
 
-- `SecondBrain.xcodeproj` — source of truth.
+- `app/SecondBrain.xcodeproj` — source of truth.
 - App target, test targets и schemes коммитятся в репозиторий.
 - SwiftPM-only приложение не подходит: нужен `.app` bundle, signing, notarization и `SMAppService`.
 - Сборка: Xcode / `xcodebuild`; Docker для macOS-приложения не используется.
@@ -82,7 +82,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Зафиксировать решения v1 (OpenCode + Jarvis, spool, S3 `meme`, без backup UI/API).
+- [x] Зафиксировать решения v1 (OpenCode + Jarvis, spool, S3 `meme`, без backup UI/API).
 - [x] Создать `docs/openapi.yaml`:
   - `POST /api/v1/ingest`
   - `POST /api/v1/memories`
@@ -104,8 +104,8 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 - [x] Зафиксировать коды ошибок, retry-политику, idempotency-key.
 - [x] Зафиксировать модель токенов и scope:
   - `ingest`, `mcp:read`, `mcp:write`, `ui`, `admin`.
-- [ ] Создать Go module и скелет `cmd/brain`.
-- [ ] Создать Xcode project `SecondBrain.xcodeproj`:
+- [x] Создать Go module и скелет `server/cmd/brain`.
+- [ ] Создать Xcode project `app/SecondBrain.xcodeproj`:
   - macOS App target, SwiftUI;
   - minimum macOS 14.0;
   - bundle id `com.serg.secondbrain` (заменить при необходимости);
@@ -115,12 +115,12 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - Development для локальной сборки;
   - Developer ID Application + notarization для распространения;
   - App Sandbox **выключен** (нужен доступ к `~/.config/opencode` и `~/.config/second-brain`).
-- [ ] Создать `Dockerfile` скелет сервера.
+- [x] Создать Dockerfile скелет сервера (`server/Dockerfile`).
 
 ### Acceptance criteria
 
 - OpenAPI и spool schema проверены и лежат в репозитории.
-- `go build ./...` проходит.
+- `cd server && go build ./...` проходит.
 - Xcode project открывается, пустое приложение запускается.
 - Понятно, какие поля и токены нужны каждой стороне.
 
@@ -132,19 +132,19 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Go-сервер:
-  - [ ] config из env;
-  - [ ] `GET /health`;
-  - [ ] SQLite open + миграции;
-  - [ ] `PRAGMA journal_mode=WAL`, `foreign_keys`, `busy_timeout`;
-  - [ ] проверка FTS5 (`CREATE VIRTUAL TABLE ... fts5`);
-  - [ ] auth middleware: bearer → client + scopes;
-  - [ ] admin bootstrap token.
-- [ ] Docker:
-  - [ ] multi-stage build;
-  - [ ] distroless/static;
-  - [ ] non-root;
-  - [ ] healthcheck.
+- [x] Go-сервер:
+  - [x] config из env;
+  - [x] `GET /health`;
+  - [x] SQLite open + миграции;
+  - [x] `PRAGMA journal_mode=WAL`, `foreign_keys`, `busy_timeout`;
+  - [x] проверка FTS5 (`CREATE VIRTUAL TABLE ... fts5`);
+  - [x] auth middleware: bearer → client + scopes;
+  - [x] admin bootstrap token.
+- [x] Docker:
+  - [x] multi-stage build;
+  - [x] distroless/static;
+  - [x] non-root;
+  - [x] healthcheck.
 - [ ] Dokploy:
   - [ ] Application из Dockerfile;
   - [ ] domain + Let's Encrypt;
@@ -152,7 +152,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] volume `/data`;
   - [ ] env (`BRAIN_DB`, `BRAIN_ADMIN_TOKEN`, `BRAIN_LLM_*`, `S3_*`, `BACKUP_*`);
   - [ ] одна реплика, stop-first.
-- [ ] Логи `slog` в stdout.
+- [x] Логи `slog` в stdout.
 
 ### Acceptance criteria
 
@@ -290,7 +290,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 **Цель:** собираемое в Xcode приложение с onboarding и API-клиентом.
 
-> Приложение делается именно в Xcode: `SecondBrain.xcodeproj` — source of truth. Не SwiftPM-only.
+> Приложение делается именно в Xcode: `app/SecondBrain.xcodeproj` — source of truth. Не SwiftPM-only.
 
 ### Задачи
 
