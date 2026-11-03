@@ -38,9 +38,18 @@ type preparedIngest struct {
 }
 
 func prepareIngest(params IngestParams) preparedIngest {
+	// The idempotency hash must cover the exact request body so a retry that
+	// changes even a secret value is still treated as a different request.
+	requestHash := params.Bundle.RequestHash()
+
+	// Mask before rendering raw text or building the card: secrets must never
+	// reach SQLite or a later LLM prompt. The content hash is computed after
+	// masking, so captures that differ only in secret values have the same
+	// stored knowledge and do not create a new revision.
+	params.Bundle = params.Bundle.Masked()
 	return preparedIngest{
 		IngestParams: params,
-		requestHash:  params.Bundle.RequestHash(),
+		requestHash:  requestHash,
 		contentHash:  params.Bundle.ContentHash(),
 		rawText:      params.Bundle.RawText(),
 		card:         params.Bundle.HeuristicCard(),
