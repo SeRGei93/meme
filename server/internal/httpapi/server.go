@@ -27,9 +27,18 @@ type Options struct {
 }
 
 type route struct {
-	method  string
-	path    string
-	handler http.HandlerFunc
+	method     string
+	path       string
+	oneSegment bool // match exactly one non-empty segment after path
+	handler    http.HandlerFunc
+}
+
+func (rt route) matches(path string) bool {
+	if !rt.oneSegment {
+		return path == rt.path
+	}
+	rest, ok := strings.CutPrefix(path, rt.path)
+	return ok && rest != "" && !strings.Contains(rest, "/")
 }
 
 type server struct {
@@ -57,7 +66,9 @@ func New(opts Options) http.Handler {
 	}
 	s.routes = []route{
 		{method: http.MethodGet, path: "/health", handler: s.handleHealth},
-		{method: http.MethodPost, path: "/api/v1/clients", handler: s.requireScopes(auth.ScopeAdmin)(s.handleCreateClient)},
+		{method: http.MethodGet, path: clientsPath, handler: s.requireScopes(auth.ScopeAdmin)(s.handleListClients)},
+		{method: http.MethodPost, path: clientsPath, handler: s.requireScopes(auth.ScopeAdmin)(s.handleCreateClient)},
+		{method: http.MethodDelete, path: clientsPath + "/", oneSegment: true, handler: s.requireScopes(auth.ScopeAdmin)(s.handleRevokeClient)},
 	}
 
 	return withRequestID(s.withLogging(s.withRecovery(s)))
@@ -66,7 +77,7 @@ func New(opts Options) http.Handler {
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var allowed []string
 	for _, rt := range s.routes {
-		if rt.path != r.URL.Path {
+		if !rt.matches(r.URL.Path) {
 			continue
 		}
 		if rt.method == r.Method {
