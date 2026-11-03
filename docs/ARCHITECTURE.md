@@ -817,7 +817,7 @@ END;
 CREATE TABLE ingest_jobs (
     id               INTEGER PRIMARY KEY,
     client_id        INTEGER NOT NULL REFERENCES clients(id),
-    idempotency_key  TEXT NOT NULL,
+    idempotency_key  TEXT NOT NULL DEFAULT '', -- request that enqueued the job
     source           TEXT NOT NULL,
     external_id      TEXT NOT NULL,
     record_id        INTEGER REFERENCES records(id),
@@ -827,9 +827,26 @@ CREATE TABLE ingest_jobs (
     next_retry_at    TEXT,
     error            TEXT NOT NULL DEFAULT '',
     created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL,
-    UNIQUE(client_id, idempotency_key)
+    updated_at       TEXT NOT NULL
 );
+
+CREATE INDEX idx_ingest_jobs_status ON ingest_jobs(status, id);
+
+-- Replay state for Idempotency-Key, kept separate from the queue so a natural
+-- replay does not create a card job. Rows are valid for 24 hours.
+CREATE TABLE idempotency_keys (
+    client_id     INTEGER NOT NULL REFERENCES clients(id),
+    operation     TEXT NOT NULL,
+    key           TEXT NOT NULL,
+    request_hash  TEXT NOT NULL,
+    record_id     INTEGER NOT NULL REFERENCES records(id),
+    job_id        INTEGER REFERENCES ingest_jobs(id),
+    status        TEXT NOT NULL CHECK (status IN ('queued', 'stored')),
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (client_id, operation, key)
+);
+
+CREATE INDEX idx_idempotency_created ON idempotency_keys(created_at);
 
 CREATE TABLE links (
     from_id  INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,

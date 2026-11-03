@@ -131,8 +131,8 @@ func TestHealthReturnsDatabaseState(t *testing.T) {
 	if body.Version != "test" {
 		t.Errorf("version = %q, want test", body.Version)
 	}
-	if body.SchemaVersion != 1 {
-		t.Errorf("schema_version = %d, want 1", body.SchemaVersion)
+	if body.SchemaVersion != 2 {
+		t.Errorf("schema_version = %d, want 2", body.SchemaVersion)
 	}
 	if body.Time.IsZero() {
 		t.Error("time is zero")
