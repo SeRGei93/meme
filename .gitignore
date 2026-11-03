@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Runtime data
+spool/
+backups/
+tmp/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Go
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Node
+node_modules/
+
+# Xcode / Swift
+DerivedData/
+.build/
+xcuserdata/
+*.xcuserstate
