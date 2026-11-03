@@ -14,6 +14,7 @@ Second Brain — центральная память для OpenCode и Jarvis.
 
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Контракты v1](docs/CONTRACTS.md)
 
 ## Workflow по тикетам
 
@@ -23,7 +24,7 @@ Second Brain — центральная память для OpenCode и Jarvis.
 - Тикет доступен, когда все его `blocked-by` закрыты.
 - Новая сессия начинает с `/next-ticket` или `/next-ticket <номер>`, если пользователь не сказал иначе.
 - Перед работой: issue, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `GLOSSARY.md` и ADR, если они есть.
-- Реализация — через `@implement`: TDD на согласованных seam'ах и code-review.
+- Реализация — через `@implement`: TDD на согласованных seam'ах и `@code-review`.
 - Завершение: acceptance criteria, тесты, PR с `Closes #<n>`; issue закрывается после merge.
 - Не начинать тикет с открытыми блокерами и не трогать parent #1.
 

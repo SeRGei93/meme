@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "bundle_id": "6f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3",
+  "source": "opencode",
+  "external_id": "ses_01JABCDEF",
+  "project_key": "github.com/SeRGei93/meme",
+  "project_path": "/Users/serg/PhpstormProjects/meme",
+  "title": "Fix SQLite migration ordering",
+  "final": true,
+  "started_at": "2026-11-03T12:00:00Z",
+  "updated_at": "2026-11-03T13:00:00Z",
+  "messages": [
+    {
+      "id": "msg_1",
+      "role": "user",
+      "text": "Why does migration 004 run before 003?",
+      "at": "2026-11-03T12:00:10Z"
+    },
+    {
+      "id": "msg_2",
+      "role": "assistant",
+      "text": "The migration runner sorts filenames lexicographically. I will sort by numeric prefix.",
+      "at": "2026-11-03T12:00:30Z",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "command": "go test ./internal/store/...",
+          "path": "/Users/serg/PhpstormProjects/meme"
+        }
+      ]
+    },
+    {
+      "id": "msg_3",
+      "role": "user",
+      "text": "Ship it.",
+      "at": "2026-11-03T12:59:00Z"
+    }
+  ],
+  "metadata": {
+    "agent": "build",
+    "model": "provider/model",
+    "branch": "main",
+    "opencode_version": "1.2.3"
+  }
+}

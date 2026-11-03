@@ -1,0 +1,10 @@
+extends:
+  - recommended
+
+rules:
+  # v1 is proprietary; no public license URL yet.
+  info-license-strict: off
+  # brain.example.com is the documented production placeholder.
+  no-server-example.com: off
+  # /health is intentionally public and has no 4xx response.
+  operation-4xx-response: off
