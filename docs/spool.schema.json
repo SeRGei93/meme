@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brain.example.com/contracts/spool-bundle-v1.json",
+  "title": "Second Brain spool bundle v1",
+  "description": "One normalized OpenCode session captured by the OpenCode plugin and written atomically to the local spool directory. The macOS app uploads the bundle as-is (minus source-owned fields) to POST /api/v1/ingest. Contract version: 1. Unknown fields are rejected.",
+  "$ref": "#/$defs/Bundle",
+  "$defs": {
+    "Bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bundle_id",
+        "source",
+        "external_id",
+        "project_key",
+        "project_path",
+        "title",
+        "final",
+        "started_at",
+        "updated_at",
+        "messages",
+        "metadata"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "description": "Spool contract version. Bump only for breaking changes."
+        },
+        "bundle_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique bundle id. The app uses it as the Idempotency-Key and to coalesce multiple bundles of the same session."
+        },
+        "source": {
+          "const": "opencode",
+          "description": "Always opencode for spool bundles. The server derives source from the token and rejects this field on ingest."
+        },
+        "external_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^\\S+$",
+          "description": "OpenCode session id. Together with the client it identifies the record across re-sends."
+        },
+        "project_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Normalized project key. Priority: git remote as host/owner/repo, then opencode:<projectID>, then local:<host>:<path>."
+        },
+        "project_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Absolute local project path at capture time."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Human-readable session title. The plugin may derive it from the first user message."
+        },
+        "final": {
+          "type": "boolean",
+          "description": "True when the session is complete and the server should generate a card. Live captures may be false; the finalizer marks idle sessions final after 30 minutes."
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Session start (RFC 3339). Must be earlier than or equal to updated_at."
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last message timestamp (RFC 3339)."
+        },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "metadata": {
+          "$ref": "#/$defs/Metadata"
+        }
+      }
+    },
+    "Message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "text", "at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Stable OpenCode message id. Used for deduplication and ordering."
+        },
+        "role": {
+          "$ref": "#/$defs/MessageRole"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 200000,
+          "description": "Normalized text. Reasoning and huge tool outputs are stripped by the plugin; a tool-only message may have empty text."
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Message timestamp (RFC 3339)."
+        },
+        "tool_calls": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          }
+        }
+      }
+    },
+    "MessageRole": {
+      "type": "string",
+      "enum": ["user", "assistant", "system", "tool"]
+    },
+    "ToolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "A normalized tool call. Large tool outputs are intentionally not captured; only name, command and path are kept.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "command": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Informational capture context. Unknown keys are rejected so the contract stays explicit.",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "opencode_version": {
+          "type": "string",
+          "maxLength": 100
+        }
+      }
+    },
+    "IngestRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/v1/ingest body. Identical to Bundle without schema_version and source, which are server-owned (source is derived from the bearer token).",
+      "required": [
+        "bundle_id",
+        "external_id",
+        "project_key",
+        "project_path",
+        "title",
+        "final",
+        "started_at",
+        "updated_at",
+        "messages",
+        "metadata"
+      ],
+      "properties": {
+        "bundle_id": {
+          "$ref": "#/$defs/Bundle/properties/bundle_id"
+        },
+        "external_id": {
+          "$ref": "#/$defs/Bundle/properties/external_id"
+        },
+        "project_key": {
+          "$ref": "#/$defs/Bundle/properties/project_key"
+        },
+        "project_path": {
+          "$ref": "#/$defs/Bundle/properties/project_path"
+        },
+        "title": {
+          "$ref": "#/$defs/Bundle/properties/title"
+        },
+        "final": {
+          "$ref": "#/$defs/Bundle/properties/final"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Bundle/properties/started_at"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Bundle/properties/updated_at"
+        },
+        "messages": {
+          "$ref": "#/$defs/Bundle/properties/messages"
+        },
+        "metadata": {
+          "$ref": "#/$defs/Bundle/properties/metadata"
+        }
+      }
+    }
+  }
+}

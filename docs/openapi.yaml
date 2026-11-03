@@ -1,0 +1,1604 @@
+openapi: 3.1.0
+info:
+  title: Second Brain API
+  version: 1.0.0
+  description: |
+    REST API v1 for Second Brain — the central memory for OpenCode and Jarvis.
+
+    ## Authentication
+
+    Every endpoint except `GET /health` requires an opaque bearer token:
+
+    ```http
+    Authorization: Bearer sb_opencode_<random>
+    ```
+
+    Tokens are issued by `POST /api/v1/clients` (admin scope) and are shown exactly
+    once. The server stores only a SHA-256 hash. The token determines the client and
+    the `source` (`opencode` or `jarvis`); clients cannot set `source` in a request
+    body.
+
+    ## Scopes
+
+    Each operation declares `x-required-scopes`. The list is an **any-of** list:
+    presenting any one of the listed scopes authorizes the call. The only defined
+    scopes are `ingest`, `mcp:read`, `mcp:write`, `ui` and `admin`.
+
+    ## Errors
+
+    All error responses use the `ErrorEnvelope` schema:
+
+    ```json
+    {
+      "error": {
+        "code": "validation_failed",
+        "message": "messages[0].role must be one of user, assistant, system, tool",
+        "details": { "field": "messages[0].role" },
+        "request_id": "req_01J..."
+      }
+    }
+    ```
+
+    `code` is stable and safe to branch on. `message` is human-readable and may
+    change. Retry rules and idempotency semantics are documented in
+    `docs/CONTRACTS.md`.
+
+    ## Versioning
+
+    `/api/v1` is frozen for v1. Additive changes (new optional fields, new
+    endpoints, new error codes) are allowed. Removing fields, changing types or
+    changing the meaning of an error code requires `/api/v2`.
+  license:
+    name: Proprietary
+servers:
+  - url: https://brain.example.com
+    description: Production (Dokploy)
+  - url: http://localhost:8080
+    description: Local development and mock API
+tags:
+  - name: health
+    description: Liveness and readiness.
+  - name: ingest
+    description: Write sessions and structured memories.
+  - name: read
+    description: Read cards, records, projects, graph and statistics.
+  - name: clients
+    description: Issue and revoke bearer tokens (admin only).
+  - name: jobs
+    description: Inspect the ingestion queue (admin only).
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Healthcheck
+      description: |
+        Public endpoint used by Dokploy and the macOS app. Returns `200` when the
+        process can serve traffic and the database is writable. Returns `503`
+        with the same body shape when the database is unavailable. The container
+        healthcheck treats any `2xx` as healthy.
+      security: []
+      x-required-scopes: []
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Service is running but the database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/v1/ingest:
+    post:
+      operationId: ingestSession
+      x-required-scopes: [ingest]
+      security:
+        - bearerAuth: []
+      tags: [ingest]
+      summary: Ingest an OpenCode session bundle
+      description: |
+        Accepts one normalized spool bundle. The server derives `source=opencode`
+        from the token. The request body is the bundle without `schema_version` and
+        `source`; both are rejected as unknown fields.
+
+        The call is idempotent. Send `Idempotency-Key` (the macOS app uses the
+        bundle's `bundle_id`) so retries can be replayed safely. When the header is
+        omitted, the server uses `bundle_id` as the key. A replay with the same key
+        and the same request body returns `200` with `replayed: true`; reusing the
+        key with a different body returns `409 idempotency_key_reused`.
+
+        If `final=true`, a card-generation job is queued. If `final=false`, the
+        raw text is stored and no card job is created.
+
+        The same `external_id` with unchanged `content_hash` does not create a new
+        record or a new card job. A changed `content_hash` updates the existing
+        record and increments `revision`. A repeat with unchanged content but a
+        different `Idempotency-Key` returns `200` with `replayed: true`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+            examples:
+              session:
+                summary: A finished OpenCode session
+                value:
+                  bundle_id: 6f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3
+                  external_id: ses_01JABCDEF
+                  project_key: github.com/SeRGei93/meme
+                  project_path: /Users/serg/PhpstormProjects/meme
+                  title: Fix SQLite migration ordering
+                  final: true
+                  started_at: '2026-11-03T12:00:00Z'
+                  updated_at: '2026-11-03T13:00:00Z'
+                  messages:
+                    - id: msg_1
+                      role: user
+                      text: Why does migration 004 run before 003?
+                      at: '2026-11-03T12:00:10Z'
+                    - id: msg_2
+                      role: assistant
+                      text: The runner sorts filenames lexicographically.
+                      at: '2026-11-03T12:00:30Z'
+                  metadata:
+                    agent: build
+                    model: provider/model
+                    branch: main
+                    opencode_version: 1.2.3
+      responses:
+        '200':
+          description: Idempotent replay of an already accepted request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              examples:
+                replay:
+                  value:
+                    record_id: 42
+                    job_id: 17
+                    status: queued
+                    replayed: true
+        '202':
+          description: Bundle accepted and stored; a card job may be queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              examples:
+                accepted:
+                  value:
+                    record_id: 42
+                    job_id: 17
+                    status: queued
+                    replayed: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/memories:
+    post:
+      operationId: createMemory
+      x-required-scopes: [ingest]
+      security:
+        - bearerAuth: []
+      tags: [ingest]
+      summary: Store a structured memory
+      description: |
+        Stores one fact, decision or note, typically from Jarvis. The server derives
+        `source=jarvis` from the token.
+
+        If the request already contains a complete card (`title` and `summary`), the
+        server does not call the LLM. Otherwise the server generates a card
+        asynchronously and returns `status: queued`.
+
+        Idempotency follows `(client, external_id)` when `external_id` is supplied;
+        otherwise the server derives a stable id from the request content. Repeating
+        the same request returns `200` with `replayed: true`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryRequest'
+            examples:
+              cardProvided:
+                summary: Jarvis sends a complete card
+                value:
+                  external_id: evt_01JABCDEF
+                  project_key: second-brain
+                  occurred_at: '2026-11-03T13:30:00Z'
+                  title: Choose SQLite FTS5 over pgvector
+                  summary: v1 uses SQLite FTS5 with BM25 and freshness decay.
+                  keywords: [sqlite, fts5, decision]
+                  atoms: ['No vector search in v1.']
+                  raw_text: 'Decision: use SQLite FTS5 instead of pgvector.'
+              textOnly:
+                summary: Jarvis sends raw text only
+                value:
+                  project_key: jarvis
+                  raw_text: Remind me that the backup bucket is called meme.
+      responses:
+        '200':
+          description: Idempotent replay of an already stored memory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryResponse'
+        '201':
+          description: Memory stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryResponse'
+              examples:
+                stored:
+                  value:
+                    record_id: 43
+                    job_id: null
+                    status: indexed
+                    replayed: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/search:
+    get:
+      operationId: searchRecords
+      x-required-scopes: [ui, mcp:read]
+      security:
+        - bearerAuth: []
+      tags: [read]
+      summary: Search memory
+      description: |
+        Full-text search over cards. `search` returns cards without `raw_text`;
+        use `GET /api/v1/records/{id}` for the full text. Results are ranked by
+        `-bm25(...) * 0.5^(age_days / 120)` and capped at `limit` (default 8).
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query. Normalized to lower case; Russian word forms use prefixes.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 500
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 8
+        - name: project_key
+          in: query
+          required: false
+          description: Restrict results to one project.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 500
+        - name: source
+          in: query
+          required: false
+          description: Restrict results to one source.
+          schema:
+            $ref: '#/components/schemas/Source'
+        - name: since
+          in: query
+          required: false
+          description: Only records updated at or after this instant.
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          required: false
+          description: Only records updated at or before this instant.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Ranked search results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+              examples:
+                results:
+                  value:
+                    items:
+                      - id: 42
+                        source: opencode
+                        kind: session
+                        project_key: github.com/SeRGei93/meme
+                        title: Fix SQLite migration ordering
+                        summary: The migration runner sorted filenames lexicographically.
+                        questions: ['Why did migration 004 run first?']
+                        keywords: [sqlite, migration, ordering]
+                        atoms: ['Migrations now sort by numeric prefix.']
+                        is_final: true
+                        started_at: '2026-11-03T12:00:00Z'
+                        updated_at: '2026-11-03T13:00:00Z'
+                        card_status: ok
+                        score: 4.82
+                    total: 1
+                    query: migration ordering
+                    limit: 8
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/records/{id}:
+    get:
+      operationId: getRecord
+      x-required-scopes: [ui, mcp:read]
+      security:
+        - bearerAuth: []
+      tags: [read]
+      summary: Get a full record
+      description: Returns the card and the unmodified `raw_text` for one record.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Record identifier.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '200':
+          description: Full record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      x-required-scopes: [ui, mcp:read]
+      security:
+        - bearerAuth: []
+      tags: [read]
+      summary: List projects
+      description: Projects are ordered by most recent activity first.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Projects with record counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/graph:
+    get:
+      operationId: getGraph
+      x-required-scopes: [ui]
+      security:
+        - bearerAuth: []
+      tags: [read]
+      summary: Get the memory graph
+      description: |
+        Returns records as nodes and semantic links as edges. The graph is built
+        from shared projects and keyword overlap. `truncated` is true when the
+        server capped the response.
+      parameters:
+        - name: project_key
+          in: query
+          required: false
+          description: Restrict the graph to one project.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 500
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of nodes.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: min_weight
+          in: query
+          required: false
+          description: Drop edges below this weight.
+          schema:
+            type: number
+            format: double
+            minimum: 0
+            maximum: 1
+            default: 0
+      responses:
+        '200':
+          description: Graph nodes and edges.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/stats:
+    get:
+      operationId: getStats
+      x-required-scopes: [ui, mcp:read]
+      security:
+        - bearerAuth: []
+      tags: [read]
+      summary: Get database statistics
+      responses:
+        '200':
+          description: Aggregate counts and database state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/clients:
+    get:
+      operationId: listClients
+      x-required-scopes: [admin]
+      security:
+        - bearerAuth: []
+      tags: [clients]
+      summary: List clients
+      description: Returns clients without token hashes or plaintext tokens.
+      responses:
+        '200':
+          description: All clients, including revoked ones.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createClient
+      x-required-scopes: [admin]
+      security:
+        - bearerAuth: []
+      tags: [clients]
+      summary: Create a client and issue a token
+      description: |
+        Creates a client and returns its plaintext token exactly once. `source` is
+        not a request field: it is implied by `kind` (`opencode` → `opencode`,
+        `jarvis` → `jarvis`, `ui`/`admin` → no source). Names must be unique among
+        non-revoked clients; a duplicate returns `409 conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateClientRequest'
+            examples:
+              opencode:
+                value:
+                  name: opencode-macbook
+                  kind: opencode
+                  scopes: [ingest]
+              jarvis:
+                value:
+                  name: jarvis
+                  kind: jarvis
+                  scopes: [ingest, mcp:read, mcp:write]
+              app:
+                value:
+                  name: second-brain-app
+                  kind: ui
+                  scopes: [ui, admin]
+      responses:
+        '201':
+          description: Client created. The token is shown only in this response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateClientResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/clients/{id}:
+    delete:
+      operationId: revokeClient
+      x-required-scopes: [admin]
+      security:
+        - bearerAuth: []
+      tags: [clients]
+      summary: Revoke a client token
+      description: |
+        Revokes the client. Revocation is idempotent: revoking an already revoked
+        client returns `204`. Unknown ids return `404`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '204':
+          description: Client revoked (or already revoked).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      x-required-scopes: [admin]
+      security:
+        - bearerAuth: []
+      tags: [jobs]
+      summary: List ingestion jobs
+      description: |
+        Returns jobs newest first. Use `cursor` from `next_cursor` to fetch the next
+        page. `cursor` is opaque and must not be constructed by clients.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 500
+      responses:
+        '200':
+          description: A page of jobs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Opaque token issued by `POST /api/v1/clients`, or the bootstrap admin token
+        from `BRAIN_ADMIN_TOKEN`. Format: `sb_<kind>_<random>`. Never put a token
+        in a query string or log it.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Stable key for safe retries (1–128 printable ASCII characters). When
+        omitted, the server uses `bundle_id` for ingest and a content hash for
+        memories. Keys are scoped to the authenticated client and retained for
+        24 hours. Same key + same body → replay; same key + different body →
+        `409 idempotency_key_reused`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[\x20-\x7E]+$'
+  responses:
+    BadRequest:
+      description: Malformed request (invalid JSON, bad content type or bad path/query parameter).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            malformed:
+              value:
+                error:
+                  code: invalid_request
+                  message: Request body is not valid JSON.
+                  request_id: req_01J
+    Unauthorized:
+      description: Missing, malformed or revoked bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            missing:
+              value:
+                error:
+                  code: unauthorized
+                  message: A valid bearer token is required.
+                  request_id: req_01J
+    Forbidden:
+      description: Token lacks a required scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            scope:
+              value:
+                error:
+                  code: forbidden
+                  message: Token lacks the required scope.
+                  details:
+                    required_any_of: [admin]
+                  request_id: req_01J
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            missing:
+              value:
+                error:
+                  code: not_found
+                  message: Record not found.
+                  request_id: req_01J
+    Conflict:
+      description: A conflicting resource already exists, or an idempotency key was reused with a different body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            idempotency:
+              value:
+                error:
+                  code: idempotency_key_reused
+                  message: This Idempotency-Key was already used with a different payload.
+                  request_id: req_01J
+    PayloadTooLarge:
+      description: Request body exceeds the 10 MiB limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            tooLarge:
+              value:
+                error:
+                  code: payload_too_large
+                  message: Request body exceeds 10485760 bytes.
+                  request_id: req_01J
+    UnsupportedMediaType:
+      description: Content-Type is not `application/json`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            mediaType:
+              value:
+                error:
+                  code: unsupported_media_type
+                  message: Content-Type must be application/json.
+                  request_id: req_01J
+    UnprocessableEntity:
+      description: JSON is well-formed but violates the contract schema or business rules.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            schema:
+              value:
+                error:
+                  code: validation_failed
+                  message: messages[0].role must be one of user, assistant, system, tool
+                  details:
+                    field: messages[0].role
+                  request_id: req_01J
+    RateLimited:
+      description: Too many requests. Honor `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            limited:
+              value:
+                error:
+                  code: rate_limited
+                  message: Rate limit exceeded. Retry after 30 seconds.
+                  details:
+                    retry_after_seconds: 30
+                  request_id: req_01J
+    InternalError:
+      description: Unexpected server error. Safe to retry with an Idempotency-Key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: Internal server error.
+                  request_id: req_01J
+    ServiceUnavailable:
+      description: Temporary unavailability (startup, shutdown or database lock). Retry later.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unavailable:
+              value:
+                error:
+                  code: service_unavailable
+                  message: Service is temporarily unavailable.
+                  request_id: req_01J
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      description: Stable machine-readable error payload.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable error code. Clients may branch on this value.
+          enum:
+            - invalid_request
+            - validation_failed
+            - unauthorized
+            - forbidden
+            - not_found
+            - method_not_allowed
+            - conflict
+            - idempotency_key_reused
+            - payload_too_large
+            - unsupported_media_type
+            - rate_limited
+            - internal_error
+            - service_unavailable
+        message:
+          type: string
+          description: Human-readable message. Do not parse.
+          minLength: 1
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured context (for example `field` or `required_any_of`).
+        request_id:
+          type: string
+          description: Correlation id, also emitted in server logs.
+      examples:
+        - code: validation_failed
+          message: messages[0].role must be one of user, assistant, system, tool
+          details:
+            field: messages[0].role
+          request_id: req_01J
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, version, schema_version, time, database]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          description: Server build version.
+        schema_version:
+          type: integer
+          minimum: 0
+          description: Applied database migration number.
+        time:
+          type: string
+          format: date-time
+        database:
+          type: object
+          additionalProperties: false
+          required: [status, fts5]
+          properties:
+            status:
+              type: string
+              enum: [ok, error]
+            fts5:
+              type: boolean
+              description: Whether FTS5 is available in the running SQLite build.
+            error:
+              type: string
+              description: Present only when `status` is `error`.
+    Source:
+      type: string
+      description: Knowledge source. Always derived from the token; never from the request body.
+      enum: [opencode, jarvis]
+    MessageRole:
+      type: string
+      enum: [user, assistant, system, tool]
+    ToolCall:
+      type: object
+      additionalProperties: false
+      description: A normalized tool call. Large tool outputs are intentionally not captured.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        command:
+          type: string
+          maxLength: 2000
+        path:
+          type: string
+          maxLength: 2000
+    Message:
+      type: object
+      additionalProperties: false
+      required: [id, role, text, at]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Stable OpenCode message id; used for deduplication and ordering.
+        role:
+          $ref: '#/components/schemas/MessageRole'
+        text:
+          type: string
+          maxLength: 200000
+          description: Normalized text. May be empty for tool-only messages.
+        at:
+          type: string
+          format: date-time
+        tool_calls:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ToolCall'
+    BundleMetadata:
+      type: object
+      additionalProperties: false
+      description: Informational context. Unknown keys are rejected so the contract stays explicit.
+      properties:
+        agent:
+          type: string
+          maxLength: 100
+        model:
+          type: string
+          maxLength: 200
+        branch:
+          type: string
+          maxLength: 200
+        opencode_version:
+          type: string
+          maxLength: 100
+    IngestRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        One normalized OpenCode session bundle without `schema_version` and
+        `source` (both are server-owned). `source` is derived from the token.
+      required:
+        - bundle_id
+        - external_id
+        - project_key
+        - project_path
+        - title
+        - final
+        - started_at
+        - updated_at
+        - messages
+        - metadata
+      properties:
+        bundle_id:
+          type: string
+          format: uuid
+          description: Unique bundle id; also the default Idempotency-Key.
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: OpenCode session id. Together with the client it identifies the record.
+        project_key:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Normalized project key (`github.com/owner/repo`, `opencode:<id>` or `local:<host>:<path>`).
+        project_path:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Absolute local project path at capture time.
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        final:
+          type: boolean
+          description: True when the session is complete and should get a card.
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/Message'
+        metadata:
+          $ref: '#/components/schemas/BundleMetadata'
+    IngestResponse:
+      type: object
+      additionalProperties: false
+      required: [record_id, job_id, status, replayed]
+      properties:
+        record_id:
+          type: integer
+          format: int64
+          minimum: 1
+        job_id:
+          type: [integer, 'null']
+          format: int64
+          description: Card-generation job id, or null when no card was queued.
+        status:
+          type: string
+          enum: [queued, stored]
+          description: "`queued` when a card job exists, `stored` when raw text was stored without a card."
+        replayed:
+          type: boolean
+          description: True when this response is an idempotent replay.
+    MemoryRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        A structured memory. Either send a complete card (`title` **and** `summary`)
+        or raw text. When both are present the card is stored as-is and no LLM call
+        is made; if either is missing, the server generates a card asynchronously.
+      required: [raw_text]
+      properties:
+        external_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Stable id from the caller. Used for idempotency; derived from content when absent.
+        project_key:
+          type: string
+          minLength: 1
+          maxLength: 500
+          default: jarvis
+        occurred_at:
+          type: string
+          format: date-time
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        summary:
+          type: string
+          maxLength: 5000
+        questions:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        keywords:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+        atoms:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        raw_text:
+          type: string
+          minLength: 1
+          maxLength: 2000000
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Optional caller context stored verbatim as JSON.
+    MemoryResponse:
+      type: object
+      additionalProperties: false
+      required: [record_id, job_id, status, replayed]
+      properties:
+        record_id:
+          type: integer
+          format: int64
+          minimum: 1
+        job_id:
+          type: [integer, 'null']
+          format: int64
+          description: Card-generation job id when the server must generate a card.
+        status:
+          type: string
+          enum: [indexed, queued]
+          description: "`indexed` when a complete card was supplied, `queued` when generation is pending."
+        replayed:
+          type: boolean
+    RecordKind:
+      type: string
+      enum: [session, memory]
+    CardStatus:
+      type: string
+      enum: [heuristic, queued, ok, failed]
+    Card:
+      type: object
+      description: A search result or record without `raw_text`.
+      required:
+        - id
+        - source
+        - kind
+        - project_key
+        - title
+        - summary
+        - questions
+        - keywords
+        - atoms
+        - is_final
+        - updated_at
+        - card_status
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        source:
+          $ref: '#/components/schemas/Source'
+        kind:
+          $ref: '#/components/schemas/RecordKind'
+        project_key:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        questions:
+          type: array
+          items:
+            type: string
+        keywords:
+          type: array
+          items:
+            type: string
+        atoms:
+          type: array
+          items:
+            type: string
+        is_final:
+          type: boolean
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        finalized_at:
+          type: [string, 'null']
+          format: date-time
+        card_status:
+          $ref: '#/components/schemas/CardStatus'
+        card_model:
+          type: [string, 'null']
+    SearchHit:
+      allOf:
+        - $ref: '#/components/schemas/Card'
+        - type: object
+          required: [score]
+          properties:
+            score:
+              type: number
+              format: double
+              description: Positive relevance score; higher is better.
+    Record:
+      allOf:
+        - $ref: '#/components/schemas/Card'
+        - type: object
+          required: [raw_text, revision, metadata]
+          properties:
+            raw_text:
+              type: string
+            revision:
+              type: integer
+              minimum: 1
+            metadata:
+              type: object
+              additionalProperties: true
+            indexed_at:
+              type: string
+              format: date-time
+    SearchResponse:
+      type: object
+      additionalProperties: false
+      required: [items, total, query, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchHit'
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of matching records before `limit`.
+        query:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+    Project:
+      type: object
+      additionalProperties: false
+      required: [key, name, path, record_count, created_at]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        record_count:
+          type: integer
+          minimum: 0
+        last_activity_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ProjectList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+    GraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, title, project_key, source, kind, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        title:
+          type: string
+        project_key:
+          type: string
+        source:
+          $ref: '#/components/schemas/Source'
+        kind:
+          $ref: '#/components/schemas/RecordKind'
+        updated_at:
+          type: string
+          format: date-time
+        weight:
+          type: number
+          format: double
+    GraphEdge:
+      type: object
+      additionalProperties: false
+      required: [from_id, to_id, weight, reason]
+      properties:
+        from_id:
+          type: integer
+          format: int64
+        to_id:
+          type: integer
+          format: int64
+        weight:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        reason:
+          type: string
+          enum: [project, keywords]
+    GraphResponse:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges, truncated]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+        truncated:
+          type: boolean
+    RecordCounts:
+      type: object
+      additionalProperties: false
+      required: [total, final, draft]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        final:
+          type: integer
+          minimum: 0
+        draft:
+          type: integer
+          minimum: 0
+    SourceCounts:
+      type: object
+      additionalProperties: false
+      required: [opencode, jarvis]
+      properties:
+        opencode:
+          type: integer
+          minimum: 0
+        jarvis:
+          type: integer
+          minimum: 0
+    CardStatusCounts:
+      type: object
+      additionalProperties: false
+      required: [heuristic, queued, ok, failed]
+      properties:
+        heuristic:
+          type: integer
+          minimum: 0
+        queued:
+          type: integer
+          minimum: 0
+        ok:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+    JobCounts:
+      type: object
+      additionalProperties: false
+      required: [queued, running, done, failed]
+      properties:
+        queued:
+          type: integer
+          minimum: 0
+        running:
+          type: integer
+          minimum: 0
+        done:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+    Stats:
+      type: object
+      additionalProperties: false
+      required: [records, projects, clients, jobs, database]
+      properties:
+        records:
+          allOf:
+            - $ref: '#/components/schemas/RecordCounts'
+            - type: object
+              additionalProperties: false
+              required: [by_source, by_card_status]
+              properties:
+                by_source:
+                  $ref: '#/components/schemas/SourceCounts'
+                by_card_status:
+                  $ref: '#/components/schemas/CardStatusCounts'
+        projects:
+          type: integer
+          minimum: 0
+        clients:
+          type: integer
+          minimum: 0
+          description: Active (not revoked) clients.
+        jobs:
+          $ref: '#/components/schemas/JobCounts'
+        last_ingest_at:
+          type: [string, 'null']
+          format: date-time
+        database:
+          type: object
+          additionalProperties: false
+          required: [status, schema_version, size_bytes]
+          properties:
+            status:
+              type: string
+              enum: [ok, error]
+            schema_version:
+              type: integer
+              minimum: 0
+            size_bytes:
+              type: integer
+              minimum: 0
+    ClientKind:
+      type: string
+      enum: [opencode, jarvis, ui, admin]
+    Scope:
+      type: string
+      enum: [ingest, mcp:read, mcp:write, ui, admin]
+    Client:
+      type: object
+      additionalProperties: false
+      required: [id, name, kind, scopes, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/ClientKind'
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Scope'
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/Source'
+            - type: 'null'
+          description: Derived from `kind`; null for ui/admin clients.
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: [string, 'null']
+          format: date-time
+        revoked_at:
+          type: [string, 'null']
+          format: date-time
+    ClientList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
+    CreateClientRequest:
+      type: object
+      additionalProperties: false
+      required: [name, kind, scopes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[A-Za-z0-9._:-]+$'
+        kind:
+          $ref: '#/components/schemas/ClientKind'
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Scope'
+    CreateClientResponse:
+      type: object
+      additionalProperties: false
+      required: [client, token]
+      properties:
+        client:
+          $ref: '#/components/schemas/Client'
+        token:
+          type: string
+          description: Plaintext token. Returned exactly once; the server stores only its SHA-256 hash.
+    JobStatus:
+      type: string
+      enum: [queued, running, done, failed]
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, client_id, kind, status, attempts, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        client_id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum: [ingest, memory]
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        attempts:
+          type: integer
+          minimum: 0
+        external_id:
+          type: string
+        record_id:
+          type: [integer, 'null']
+          format: int64
+        next_retry_at:
+          type: [string, 'null']
+          format: date-time
+        error:
+          type: [string, 'null']
+          description: Masked error text; never contains secrets.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    JobList:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        next_cursor:
+          type: [string, 'null']
+          description: Opaque cursor for the next page, or null when there are no more jobs.

@@ -14,6 +14,7 @@ Second Brain — центральная память для OpenCode и Jarvis.
 
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
+- [Контракты v1](docs/CONTRACTS.md)
 
 ## Workflow по тикетам
 

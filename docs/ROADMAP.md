@@ -83,7 +83,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 ### Задачи
 
 - [ ] Зафиксировать решения v1 (OpenCode + Jarvis, spool, S3 `meme`, без backup UI/API).
-- [ ] Создать `docs/openapi.yaml`:
+- [x] Создать `docs/openapi.yaml`:
   - `POST /api/v1/ingest`
   - `POST /api/v1/memories`
   - `GET /api/v1/search`
@@ -94,15 +94,15 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - `GET /api/v1/clients`, `POST`, `DELETE`
   - `GET /api/v1/jobs`
   - `GET /health`
-- [ ] Создать `docs/spool.schema.json`:
+- [x] Создать `docs/spool.schema.json`:
   - `bundle_id`, `source`, `external_id`, `project_key`, `project_path`
   - `title`, `final`, `started_at`, `updated_at`
   - `messages[]`, `metadata`
-- [ ] Создать `docs/mcp-tools.md`:
+- [x] Создать `docs/mcp-tools.md`:
   - `search`, `get_record`, `remember`, `list_projects`, `stats`
   - входные/выходные схемы, scope
-- [ ] Зафиксировать коды ошибок, retry-политику, idempotency-key.
-- [ ] Зафиксировать модель токенов и scope:
+- [x] Зафиксировать коды ошибок, retry-политику, idempotency-key.
+- [x] Зафиксировать модель токенов и scope:
   - `ingest`, `mcp:read`, `mcp:write`, `ui`, `admin`.
 - [ ] Создать Go module и скелет `cmd/brain`.
 - [ ] Создать Xcode project `SecondBrain.xcodeproj`:
