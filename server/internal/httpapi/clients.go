@@ -109,7 +109,7 @@ func (s *server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 
 	var request createClientRequest
 	if err := decoder.Decode(&request); err != nil {
-		s.writeCreateClientDecodeError(w, r, err)
+		writeJSONDecodeError(w, r, err)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (s *server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *server) writeCreateClientDecodeError(w http.ResponseWriter, r *http.Request, err error) {
+func writeJSONDecodeError(w http.ResponseWriter, r *http.Request, err error) {
 	var maxBytesError *http.MaxBytesError
 	if errors.As(err, &maxBytesError) {
 		writeError(w, r, http.StatusRequestEntityTooLarge, "payload_too_large",
