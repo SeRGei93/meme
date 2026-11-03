@@ -1,0 +1,7 @@
+**/*_test.go
+.git
+.gitignore
+coverage.out
+*.db
+*.db-wal
+*.db-shm

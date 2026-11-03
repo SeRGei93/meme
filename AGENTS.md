@@ -16,6 +16,16 @@ Second Brain — центральная память для OpenCode и Jarvis.
 - [Roadmap](docs/ROADMAP.md)
 - [Контракты v1](docs/CONTRACTS.md)
 
+## Repository layout
+
+- `server/` — Go-сервер: `go.mod`, `cmd/brain`, `internal/`, `Dockerfile`.
+- `app/` — SwiftUI-приложение (появится в M4).
+- `plugin/` — OpenCode plugin (появится в M3).
+- `tools/` — контрактные тесты, mock API, валидатор spool.
+- `docs/` — архитектура, roadmap, контракты.
+
+Go-команды запускаются из `server/`: `go test ./...`, `go build ./...`.
+
 ## Workflow по тикетам
 
 Источник правды — GitHub Issues в `SeRGei93/meme`, нарезанные из `docs/ROADMAP.md`.
