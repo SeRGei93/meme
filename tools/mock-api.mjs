@@ -201,7 +201,7 @@ function rawTextFromMessages(messages) {
 function buildRecord({
   id,
   client,
-  partial,
+  contentHash,
   body,
   nowIso,
 }) {
@@ -218,7 +218,7 @@ function buildRecord({
     keywords: body.keywords ?? [],
     atoms: body.atoms ?? [],
     raw_text: body.raw_text,
-    content_hash: sha256(stableStringify(partial)),
+    content_hash: contentHash,
     revision: 1,
     is_final: body.is_final,
     finalized_at: body.is_final ? nowIso : null,
@@ -235,6 +235,7 @@ export async function startMockApi({
   port = 8080,
   host = '127.0.0.1',
   adminToken = DEFAULT_ADMIN_TOKEN,
+  idempotencyTtlMs = 24 * 60 * 60 * 1000,
   logger = console,
 } = {}) {
   const { validateIngest } = await createSpoolValidators();
@@ -385,23 +386,53 @@ export async function startMockApi({
     return new Date(raw).getTime();
   };
 
-  const idempotent = (principal, key, body, action) => {
-    const storageKey = `${principal.id}:${key}`;
+  const clientRef = (principal) =>
+    principal.client ?? { id: principal.id, source: principal.source };
+
+  const parseId = (raw, field = 'id') => {
+    const value = Number(raw);
+    if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(value)) {
+      throw new ApiError(400, 'invalid_request', `${field} must be a positive integer.`, {
+        field,
+      });
+    }
+    return value;
+  };
+
+  const withIdempotency = (principal, operation, key, body, action) => {
+    if (
+      typeof key !== 'string' ||
+      key.length < 1 ||
+      key.length > 128 ||
+      !/^[\x20-\x7E]+$/.test(key)
+    ) {
+      throw new ApiError(
+        400,
+        'invalid_request',
+        'Idempotency-Key must be 1-128 printable ASCII characters.',
+        { field: 'Idempotency-Key' },
+      );
+    }
+
+    const storageKey = `${principal.id}:${operation}:${key}`;
     const hash = sha256(stableStringify(body));
     const existing = idempotency.get(storageKey);
     if (existing) {
-      if (existing.hash !== hash) {
-        throw new ApiError(
-          409,
-          'idempotency_key_reused',
-          'This Idempotency-Key was already used with a different payload.',
-        );
+      if (Date.now() - existing.createdAt <= idempotencyTtlMs) {
+        if (existing.hash !== hash) {
+          throw new ApiError(
+            409,
+            'idempotency_key_reused',
+            'This Idempotency-Key was already used with a different payload.',
+          );
+        }
+        return { status: 200, body: { ...existing.response, replayed: true } };
       }
-      return { status: 200, body: { ...existing.response, replayed: true } };
+      idempotency.delete(storageKey);
     }
 
     const result = action();
-    idempotency.set(storageKey, { hash, response: result.body });
+    idempotency.set(storageKey, { hash, response: result.body, createdAt: Date.now() });
     return result;
   };
 
@@ -432,7 +463,7 @@ export async function startMockApi({
 
     const idempotencyKey = request.headers['idempotency-key'] ?? body.bundle_id;
 
-    return idempotent(principal, idempotencyKey, body, () => {
+    return withIdempotency(principal, 'ingest', idempotencyKey, body, () => {
       const timestamp = now();
       const key = `${principal.id}:opencode:${body.external_id}`;
       const existing = recordsByKey.get(key);
@@ -480,8 +511,8 @@ export async function startMockApi({
       } else {
         record = buildRecord({
           id: nextId('record'),
-          client: principal.client ?? { id: principal.id, source: principal.source },
-          partial: body,
+          client: clientRef(principal),
+          contentHash,
           body: {
             external_id: body.external_id,
             project_key: body.project_key,
@@ -500,12 +531,11 @@ export async function startMockApi({
         records.push(record);
         recordsById.set(record.id, record);
         recordsByKey.set(key, record);
-        record.content_hash = contentHash;
       }
 
       if (body.final) {
         job = enqueueJob({
-          client: principal.client ?? { id: principal.id },
+          client: clientRef(principal),
           kind: 'ingest',
           externalId: body.external_id,
           recordId: record.id,
@@ -538,8 +568,8 @@ export async function startMockApi({
     const occurredAt = parseDate(body.occurred_at, 'occurred_at');
     touchProject(projectKey, '');
 
-    const idempotencyKey = request.headers['idempotency-key'] ?? `memory:${externalId}`;
-    return idempotent(principal, idempotencyKey, body, () => {
+    const idempotencyKey = request.headers['idempotency-key'] ?? `content:${contentHash}`;
+    return withIdempotency(principal, 'memory', idempotencyKey, body, () => {
       const key = `${principal.id}:${principal.source}:${externalId}`;
       const existing = recordsByKey.get(key);
       if (existing) {
@@ -565,8 +595,8 @@ export async function startMockApi({
       const timestamp = now();
       const record = buildRecord({
         id: nextId('record'),
-        client: principal.client ?? { id: principal.id, source: principal.source },
-        partial: body,
+        client: clientRef(principal),
+        contentHash,
         body: {
           external_id: externalId,
           project_key: projectKey,
@@ -585,7 +615,6 @@ export async function startMockApi({
         },
         nowIso: timestamp,
       });
-      record.content_hash = contentHash;
       records.push(record);
       recordsById.set(record.id, record);
       recordsByKey.set(key, record);
@@ -593,7 +622,7 @@ export async function startMockApi({
       let job = null;
       if (!hasCard) {
         job = enqueueJob({
-          client: principal.client ?? { id: principal.id },
+          client: clientRef(principal),
           kind: 'memory',
           externalId,
           recordId: record.id,
@@ -858,7 +887,7 @@ export async function startMockApi({
     }
 
     const timestamp = now();
-    const token = `sb_${body.kind}_${randomBytes(24).toString('base64url')}`;
+    const token = `sb_${body.kind}_${randomBytes(32).toString('base64url')}`;
     const client = {
       id: nextId('client'),
       name: body.name,
@@ -924,10 +953,10 @@ export async function startMockApi({
     },
     {
       method: 'GET',
-      pattern: /^\/api\/v1\/records\/(\d+)$/,
+      pattern: /^\/api\/v1\/records\/([^/]+)$/,
       scopes: ['ui', 'mcp:read'],
       handler: (context) => {
-        const record = recordsById.get(Number(context.params[0]));
+        const record = recordsById.get(parseId(context.params[0]));
         if (!record) throw new ApiError(404, 'not_found', 'Record not found.');
         return { status: 200, body: recordFields(record) };
       },
@@ -965,9 +994,9 @@ export async function startMockApi({
     },
     {
       method: 'DELETE',
-      pattern: /^\/api\/v1\/clients\/(\d+)$/,
+      pattern: /^\/api\/v1\/clients\/([^/]+)$/,
       scopes: ['admin'],
-      handler: (context) => revokeClient(Number(context.params[0])),
+      handler: (context) => revokeClient(parseId(context.params[0])),
     },
     {
       method: 'GET',

@@ -46,8 +46,9 @@ HTTP-слой проверяет токен до JSON-RPC:
 | Превышен rate limit | `429` + `ErrorEnvelope` (`rate_limited`) |
 
 `source` всегда определяется токеном: `opencode` для `kind=opencode`, `jarvis` для
-`kind=jarvis`. В аргументах инструментов поля `source` нет; если клиент его пришлёт —
-`validation_failed`.
+`kind=jarvis`. В аргументах инструментов **нельзя задать источник записи**; поле `source`
+есть только у `search` и работает как фильтр по уже сохранённым записям. Любая попытка
+передать `source` в `remember` — `validation_failed`.
 
 | Инструмент | Scope | Read-only | Идемпотентный |
 |---|---|---|---|
@@ -119,7 +120,7 @@ JSON-RPC error, а успешный JSON-RPC ответ с `isError: true`:
 
 Коды ошибок — те же, что в [CONTRACTS.md](CONTRACTS.md#3-коды-ошибок). В MCP-инструментах
 встречаются: `invalid_request`, `validation_failed`, `not_found`, `conflict`,
-`rate_limited`, `internal_error`, `service_unavailable`. `unauthorized` и `forbidden`
+`internal_error`, `service_unavailable`. `unauthorized`, `forbidden` и `rate_limited`
 возвращаются на HTTP-уровне до JSON-RPC.
 
 Протокольные ошибки — обычные JSON-RPC errors:
@@ -170,7 +171,8 @@ JSON-RPC error, а успешный JSON-RPC ответ с `isError: true`:
 }
 ```
 
-Отображение аргументов: `query` → `q`, `project` → `project_key`, `source` → `source`.
+Отображение аргументов: `query` → `q`, `project` → `project_key`,
+`source` — фильтр, не источник записи.
 `total` — число совпадений до применения `limit`.
 
 Пример вызова:

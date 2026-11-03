@@ -77,7 +77,7 @@ test('mock API implements the v1 contract', async (t) => {
       body: { name: 'second-brain-app', kind: 'ui', scopes: ['ui'] },
     });
     assert.equal(response.status, 201);
-    assert.match(response.body.token, /^sb_ui_/);
+    assert.match(response.body.token, /^sb_ui_[A-Za-z0-9_-]{43}$/);
     assert.equal(response.body.client.kind, 'ui');
     assert.equal(response.body.client.source, null);
     assert.deepEqual(response.body.client.scopes, ['ui']);
@@ -118,8 +118,8 @@ test('mock API implements the v1 contract', async (t) => {
 
     assert.equal(state.opencode.client.source, 'opencode');
     assert.equal(state.jarvis.client.source, 'jarvis');
-    assert.match(state.opencode.token, /^sb_opencode_/);
-    assert.match(state.jarvis.token, /^sb_jarvis_/);
+    assert.match(state.opencode.token, /^sb_opencode_[A-Za-z0-9_-]{43}$/);
+    assert.match(state.jarvis.token, /^sb_jarvis_[A-Za-z0-9_-]{43}$/);
   });
 
   await t.test('duplicate client names conflict and invalid scopes fail validation', async () => {
@@ -288,6 +288,14 @@ test('mock API implements the v1 contract', async (t) => {
     });
     assert.equal(conflicting.status, 409);
     assert.equal(conflicting.body.error.code, 'conflict');
+
+    const conflictingWithoutKey = await jsonRequest('/api/v1/memories', {
+      method: 'POST',
+      token: state.jarvis.token,
+      body: { ...payload, raw_text: 'Yet another decision.' },
+    });
+    assert.equal(conflictingWithoutKey.status, 409);
+    assert.equal(conflictingWithoutKey.body.error.code, 'conflict');
   });
 
   await t.test('text-only memories queue card generation', async () => {
@@ -303,6 +311,33 @@ test('mock API implements the v1 contract', async (t) => {
     assert.equal(response.status, 201);
     assert.equal(response.body.status, 'queued');
     assert.equal(typeof response.body.job_id, 'number');
+  });
+
+  await t.test('opencode may write memories and keys are scoped per operation', async () => {
+    const memory = await jsonRequest('/api/v1/memories', {
+      method: 'POST',
+      token: state.opencode.token,
+      headers: { 'idempotency-key': 'shared-operation-key' },
+      body: {
+        external_id: 'evt_opencode_1',
+        project_key: 'jarvis',
+        raw_text: 'OpenCode can write memories for /remember.',
+      },
+    });
+    assert.equal(memory.status, 201);
+    assert.equal(memory.body.status, 'queued');
+
+    const ingestWithSameKey = await jsonRequest('/api/v1/ingest', {
+      method: 'POST',
+      token: state.opencode.token,
+      headers: { 'idempotency-key': 'shared-operation-key' },
+      body: ingestBody({
+        bundle_id: '1d3a9e2c-0000-4000-8000-000000000002',
+        external_id: 'ses_cross_operation',
+      }),
+    });
+    assert.equal(ingestWithSameKey.status, 202);
+    assert.equal(ingestWithSameKey.body.replayed, false);
   });
 
   await t.test('search returns cards without raw text and enforces scope', async () => {
@@ -428,5 +463,73 @@ test('mock API implements the v1 contract', async (t) => {
     const wrongMethod = await jsonRequest('/health', { method: 'PATCH' });
     assert.equal(wrongMethod.status, 405);
     assert.equal(wrongMethod.body.error.code, 'method_not_allowed');
+
+    const badRecordId = await jsonRequest('/api/v1/records/abc', { token: state.uiToken });
+    assert.equal(badRecordId.status, 400);
+    assert.equal(badRecordId.body.error.code, 'invalid_request');
+
+    const badClientId = await jsonRequest('/api/v1/clients/abc', {
+      method: 'DELETE',
+      token: ADMIN_TOKEN,
+    });
+    assert.equal(badClientId.status, 400);
+    assert.equal(badClientId.body.error.code, 'invalid_request');
   });
+});
+
+
+test('mock API expires idempotency keys after the configured TTL', async () => {
+  const server = await startMockApi({
+    port: 0,
+    host: '127.0.0.1',
+    adminToken: 'ttl-admin',
+    idempotencyTtlMs: 10,
+    logger: null,
+  });
+
+  try {
+    const created = await fetch(`${server.url}/api/v1/clients`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ttl-admin', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'ttl-opencode',
+        kind: 'opencode',
+        scopes: ['ingest'],
+      }),
+    });
+    assert.equal(created.status, 201);
+    const { token } = await created.json();
+
+    const body = ingestBody({
+      bundle_id: '1d3a9e2c-0000-4000-8000-000000000003',
+      external_id: 'ses_ttl',
+    });
+    const first = await fetch(`${server.url}/api/v1/ingest`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'ttl-key',
+      },
+      body: JSON.stringify(body),
+    });
+    assert.equal(first.status, 202);
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const afterExpiry = await fetch(`${server.url}/api/v1/ingest`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'ttl-key',
+      },
+      body: JSON.stringify({ ...body, title: 'Changed after TTL' }),
+    });
+    assert.equal(afterExpiry.status, 202, 'expired key must not return idempotency_key_reused');
+    const payload = await afterExpiry.json();
+    assert.equal(payload.replayed, false);
+  } finally {
+    await server.close();
+  }
 });

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import Ajv2020 from 'ajv/dist/2020.js';
 
 const OPENAPI_PATH = fileURLToPath(new URL('../../docs/openapi.yaml', import.meta.url));
 
@@ -113,4 +114,62 @@ test('all documented responses reference declared schemas', async () => {
     for (const part of parts) target = target?.[part];
     assert.ok(target, `unresolved local $ref ${ref}`);
   }
+});
+
+function rewriteComponentRefs(node) {
+  if (Array.isArray(node)) {
+    node.forEach(rewriteComponentRefs);
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+  if (typeof node.$ref === 'string' && node.$ref.startsWith('#/components/schemas/')) {
+    node.$ref = node.$ref.replace('#/components/schemas/', '#/$defs/');
+  }
+  for (const value of Object.values(node)) rewriteComponentRefs(value);
+}
+
+function compileComponent(spec, name) {
+  const schemas = structuredClone(spec.components.schemas);
+  rewriteComponentRefs(schemas);
+  const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+  return ajv.compile({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $defs: schemas,
+    $ref: `#/$defs/${name}`,
+  });
+}
+
+test('every response example validates against its OpenAPI schema', async () => {
+  const spec = await loadSpec();
+  let checked = 0;
+
+  for (const [path, item] of Object.entries(spec.paths)) {
+    for (const [method, operation] of Object.entries(item)) {
+      for (const response of Object.values(operation.responses ?? {})) {
+        if (!response || response.$ref) continue;
+        const media = response.content?.['application/json'];
+        if (!media?.schema?.$ref) continue;
+
+        const examples = media.examples
+          ? Object.values(media.examples).map((example) => example.value)
+          : media.example !== undefined
+            ? [media.example]
+            : [];
+        if (examples.length === 0) continue;
+
+        const name = media.schema.$ref.split('/').at(-1);
+        const validate = compileComponent(spec, name);
+        for (const example of examples) {
+          assert.equal(
+            validate(example),
+            true,
+            `${method.toUpperCase()} ${path} example violates ${name}: ${JSON.stringify(validate.errors)}`,
+          );
+          checked += 1;
+        }
+      }
+    }
+  }
+
+  assert.ok(checked >= 5, `expected at least 5 response examples, checked ${checked}`);
 });

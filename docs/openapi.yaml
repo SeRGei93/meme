@@ -43,6 +43,9 @@ info:
     change. Retry rules and idempotency semantics are documented in
     `docs/CONTRACTS.md`.
 
+    Every error response carries `X-Request-Id` and repeats it as
+    `error.request_id`. A `405` response also carries `Allow`.
+
     ## Versioning
 
     `/api/v1` is frozen for v1. Additive changes (new optional fields, new
@@ -90,10 +93,15 @@ paths:
                 $ref: '#/components/schemas/Health'
         '503':
           description: Service is running but the database is unavailable.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /api/v1/ingest:
     post:
       operationId: ingestSession
@@ -187,6 +195,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -210,16 +220,17 @@ paths:
       tags: [ingest]
       summary: Store a structured memory
       description: |
-        Stores one fact, decision or note, typically from Jarvis. The server derives
-        `source=jarvis` from the token.
+        Stores one fact, decision or note, typically from Jarvis. OpenCode may also
+        call it for the `/remember` command. The server derives `source` from the
+        token (`jarvis` or `opencode`); it is never a request field.
 
         If the request already contains a complete card (`title` and `summary`), the
         server does not call the LLM. Otherwise the server generates a card
         asynchronously and returns `status: queued`.
 
-        Idempotency follows `(client, external_id)` when `external_id` is supplied;
-        otherwise the server derives a stable id from the request content. Repeating
-        the same request returns `200` with `replayed: true`.
+        Memories are keyed by `(client, source, external_id)`. Repeating the same
+        content returns `200` with `replayed: true`. Reusing an `external_id` with
+        different content returns `409 conflict`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -271,6 +282,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -377,6 +390,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -412,6 +427,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -449,6 +466,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -506,6 +525,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -525,10 +546,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Stats'
+              examples:
+                stats:
+                  value:
+                    records:
+                      total: 128
+                      final: 120
+                      draft: 8
+                      by_source:
+                        opencode: 100
+                        jarvis: 28
+                      by_card_status:
+                        heuristic: 0
+                        queued: 2
+                        ok: 123
+                        failed: 3
+                    projects: 7
+                    clients: 3
+                    jobs:
+                      queued: 2
+                      running: 1
+                      done: 120
+                      failed: 3
+                    last_ingest_at: '2026-11-03T13:00:00Z'
+                    database:
+                      status: ok
+                      schema_version: 1
+                      size_bytes: 1234567
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -553,6 +603,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -604,6 +656,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -640,6 +694,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -690,6 +746,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -712,17 +770,29 @@ components:
       description: |
         Stable key for safe retries (1–128 printable ASCII characters). When
         omitted, the server uses `bundle_id` for ingest and a content hash for
-        memories. Keys are scoped to the authenticated client and retained for
-        24 hours. Same key + same body → replay; same key + different body →
-        `409 idempotency_key_reused`.
+        memories. Keys are scoped to the authenticated client **and operation**
+        and retained for 24 hours. Same key + same body → replay; same key +
+        different body → `409 idempotency_key_reused`.
       schema:
         type: string
         minLength: 1
         maxLength: 128
         pattern: '^[\x20-\x7E]+$'
+  headers:
+    RequestId:
+      description: Correlation id, also present as `error.request_id` in error bodies and in server logs.
+      schema:
+        type: string
+    Allow:
+      description: Comma-separated list of methods allowed for this path.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: Malformed request (invalid JSON, bad content type or bad path/query parameter).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -736,6 +806,9 @@ components:
                   request_id: req_01J
     Unauthorized:
       description: Missing, malformed or revoked bearer token.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -749,6 +822,9 @@ components:
                   request_id: req_01J
     Forbidden:
       description: Token lacks a required scope.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -764,6 +840,9 @@ components:
                   request_id: req_01J
     NotFound:
       description: The requested resource does not exist.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -777,6 +856,9 @@ components:
                   request_id: req_01J
     Conflict:
       description: A conflicting resource already exists, or an idempotency key was reused with a different body.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -790,6 +872,9 @@ components:
                   request_id: req_01J
     PayloadTooLarge:
       description: Request body exceeds the 10 MiB limit.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -803,6 +888,9 @@ components:
                   request_id: req_01J
     UnsupportedMediaType:
       description: Content-Type is not `application/json`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -816,6 +904,9 @@ components:
                   request_id: req_01J
     UnprocessableEntity:
       description: JSON is well-formed but violates the contract schema or business rules.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -832,6 +923,8 @@ components:
     RateLimited:
       description: Too many requests. Honor `Retry-After`.
       headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
         Retry-After:
           description: Seconds to wait before retrying.
           schema:
@@ -852,6 +945,9 @@ components:
                   request_id: req_01J
     InternalError:
       description: Unexpected server error. Safe to retry with an Idempotency-Key.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
@@ -866,6 +962,8 @@ components:
     ServiceUnavailable:
       description: Temporary unavailability (startup, shutdown or database lock). Retry later.
       headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
         Retry-After:
           description: Seconds to wait before retrying.
           schema:
@@ -881,6 +979,26 @@ components:
                 error:
                   code: service_unavailable
                   message: Service is temporarily unavailable.
+                  request_id: req_01J
+    MethodNotAllowed:
+      description: The HTTP method is not supported for this path.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Allow:
+          $ref: '#/components/headers/Allow'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            methodNotAllowed:
+              value:
+                error:
+                  code: method_not_allowed
+                  message: Method PATCH is not allowed for /health.
+                  details:
+                    allow: [GET]
                   request_id: req_01J
   schemas:
     Error:
@@ -1052,6 +1170,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+          pattern: '^\S+$'
           description: OpenCode session id. Together with the client it identifies the record.
         project_key:
           type: string
@@ -1375,10 +1494,10 @@ components:
             $ref: '#/components/schemas/GraphEdge'
         truncated:
           type: boolean
-    RecordCounts:
+    RecordStats:
       type: object
       additionalProperties: false
-      required: [total, final, draft]
+      required: [total, final, draft, by_source, by_card_status]
       properties:
         total:
           type: integer
@@ -1389,6 +1508,10 @@ components:
         draft:
           type: integer
           minimum: 0
+        by_source:
+          $ref: '#/components/schemas/SourceCounts'
+        by_card_status:
+          $ref: '#/components/schemas/CardStatusCounts'
     SourceCounts:
       type: object
       additionalProperties: false
@@ -1440,16 +1563,7 @@ components:
       required: [records, projects, clients, jobs, database]
       properties:
         records:
-          allOf:
-            - $ref: '#/components/schemas/RecordCounts'
-            - type: object
-              additionalProperties: false
-              required: [by_source, by_card_status]
-              properties:
-                by_source:
-                  $ref: '#/components/schemas/SourceCounts'
-                by_card_status:
-                  $ref: '#/components/schemas/CardStatusCounts'
+          $ref: '#/components/schemas/RecordStats'
         projects:
           type: integer
           minimum: 0

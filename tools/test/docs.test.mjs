@@ -67,6 +67,47 @@ test('OpenAPI schemas do not drift from the spool schema', async () => {
   const spec = YAML.parse(await readFile(OPENAPI, 'utf8'));
   const spool = JSON.parse(await readFile(SPOOL, 'utf8'));
 
+  const resolveRef = (document, ref) =>
+    ref
+      .slice(2)
+      .split('/')
+      .reduce(
+        (node, part) => node?.[part.replaceAll('~1', '/').replaceAll('~0', '~')],
+        document,
+      );
+
+  const shape = (document, node) => {
+    if (Array.isArray(node)) return node.map((item) => shape(document, item));
+    if (!node || typeof node !== 'object') return node;
+    if (node.$ref) return shape(document, resolveRef(document, node.$ref));
+
+    const out = {};
+    for (const key of [
+      'type',
+      'format',
+      'const',
+      'minLength',
+      'maxLength',
+      'pattern',
+      'minimum',
+      'maximum',
+      'minItems',
+      'maxItems',
+      'additionalProperties',
+    ]) {
+      if (key in node) out[key] = node[key];
+    }
+    if (node.enum) out.enum = [...node.enum];
+    if (node.required) out.required = [...node.required].sort();
+    if (node.items) out.items = shape(document, node.items);
+    if (node.properties) {
+      out.properties = Object.fromEntries(
+        Object.entries(node.properties).map(([name, value]) => [name, shape(document, value)]),
+      );
+    }
+    return out;
+  };
+
   const pairs = [
     ['IngestRequest', 'IngestRequest'],
     ['Message', 'Message'],
@@ -80,14 +121,9 @@ test('OpenAPI schemas do not drift from the spool schema', async () => {
     assert.ok(openapi, `OpenAPI misses ${openapiName}`);
     assert.ok(schema, `spool schema misses ${spoolName}`);
     assert.deepEqual(
-      Object.keys(openapi.properties).sort(),
-      Object.keys(schema.properties).sort(),
-      `${openapiName} fields drift from spool ${spoolName}`,
-    );
-    assert.deepEqual(
-      [...(openapi.required ?? [])].sort(),
-      [...(schema.required ?? [])].sort(),
-      `${openapiName} required fields drift from spool ${spoolName}`,
+      shape(spec, openapi),
+      shape(spool, schema),
+      `${openapiName} drifts from spool ${spoolName}`,
     );
   }
 

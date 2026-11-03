@@ -9,7 +9,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema_version",
         "bundle_id",
         "source",
         "external_id",
@@ -25,7 +24,8 @@
       "properties": {
         "schema_version": {
           "const": 1,
-          "description": "Spool contract version. Bump only for breaking changes."
+          "default": 1,
+          "description": "Spool contract version. Optional for compatibility with the architecture example; when present it must be 1."
         },
         "bundle_id": {
           "type": "string",

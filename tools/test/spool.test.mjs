@@ -61,6 +61,13 @@ test('example bundle on disk validates', async () => {
   assert.equal(validate(bundle), true, JSON.stringify(validate.errors, null, 2));
 });
 
+test('architecture bundle without schema_version validates', async () => {
+  const validate = compile(await loadSchema());
+  const bundle = validBundle();
+  delete bundle.schema_version;
+  assert.equal(validate(bundle), true, JSON.stringify(validate.errors, null, 2));
+});
+
 test('architecture bundle with tool calls validates', async () => {
   const validate = compile(await loadSchema());
   const bundle = validBundle({
