@@ -1,10 +1,11 @@
 import { hostname as osHostname } from 'node:os';
 import { runBackfill } from './backfill.ts';
+import { runRememberCommand, type FetchLike } from './remember.ts';
 import { createCapture, type WriteBundle } from './capture.ts';
 import { loadConfig, type PluginConfig } from './config.ts';
 import type { StorageLike } from './cursor.ts';
 import { CAPTURE_EVENTS, createEventRouter, type EventLike } from './events.ts';
-import { findGitRemote } from './project.ts';
+import { findGitRemote, resolveProjectKey } from './project.ts';
 import type { SessionInfoLike, SessionMessageLike } from './types.ts';
 
 /** The OpenCode subset this plugin needs; index.ts adapts the real SDK to it. */
@@ -20,6 +21,12 @@ export interface SetupSession {
     data: readonly SessionInfoLike[];
     cursor?: { next?: string | null };
   }>;
+  /** Injects a visible message into the session; used by /remember. */
+  synthetic?(input: {
+    sessionID: string;
+    text: string;
+    description?: string | null;
+  }): Promise<unknown>;
   hook(
     name: 'compaction',
     callback: (event: { sessionID: string }) => Promise<void>,
@@ -37,6 +44,22 @@ export interface SetupContext {
   readonly event: {
     subscribe(options: { types: readonly string[]; signal: AbortSignal }): AsyncIterable<EventLike>;
   };
+  readonly command?: {
+    transform(callback: (editor: RememberCommandEditor) => void): Promise<{ dispose(): Promise<void> }>;
+  };
+}
+
+export interface RememberInvocation {
+  readonly sessionID: string;
+  readonly prompt: { readonly text: string };
+}
+
+export interface RememberCommandEditor {
+  add(definition: {
+    readonly name: string;
+    readonly description?: string;
+    readonly execute: (invocation: RememberInvocation) => Promise<void>;
+  }): void;
 }
 
 export interface SetupOptions {
@@ -51,6 +74,11 @@ export interface SetupOptions {
     readonly enabled?: boolean;
     readonly pageSize?: number;
     readonly throttleMs?: number;
+  };
+  readonly remember?: {
+    readonly fetch?: FetchLike;
+    readonly readFile?: (path: string) => Promise<string>;
+    readonly timeoutMs?: number;
   };
 }
 
@@ -69,6 +97,22 @@ export function logError(error: unknown): void {
 export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {}): Promise<Cleanup> {
   const onError = options.onError ?? logError;
   const config = options.config ?? (await loadConfig());
+  const hostname = options.hostname ?? osHostname();
+  const findRemote = options.findRemote ?? findGitRemote;
+  const rememberProjectKey = async (): Promise<string> => {
+    let remote: string | undefined;
+    try {
+      remote = await findRemote(ctx.location.directory);
+    } catch {
+      remote = undefined;
+    }
+    return resolveProjectKey({
+      remoteUrl: remote,
+      projectID: ctx.location.project.id,
+      directory: ctx.location.directory,
+      hostname,
+    });
+  };
   const capture = createCapture({
     sessions: {
       get: (input) => ctx.session.get(input),
@@ -78,7 +122,7 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
     config,
     directory: ctx.location.directory,
     projectID: ctx.location.project.id,
-    hostname: options.hostname ?? osHostname(),
+    hostname,
     opencodeVersion: ctx.app.version,
     vcs: {
       branch: async (directory) => {
@@ -86,7 +130,7 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
         return info.data.branch.current;
       },
     },
-    findRemote: options.findRemote ?? findGitRemote,
+    findRemote,
     now: options.now,
     uuid: options.uuid,
     write: options.write,
@@ -137,15 +181,44 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
     }
   })();
 
+  // Optional feature: a broken command registration must never disable capture.
+  const synthetic = ctx.session.synthetic?.bind(ctx.session);
+  let commandRegistration: { dispose(): Promise<void> } | undefined;
+  try {
+    if (ctx.command) {
+      commandRegistration = await ctx.command.transform((editor) => {
+        editor.add({
+          name: 'remember',
+          description: 'Сохранить факт или заметку в Second Brain',
+          execute: (invocation) =>
+            runRememberCommand(invocation, {
+              config,
+              projectKey: rememberProjectKey,
+              readFile: options.remember?.readFile,
+              fetch: options.remember?.fetch,
+              timeoutMs: options.remember?.timeoutMs,
+              say: synthetic ? (input) => synthetic(input) : undefined,
+            }),
+        });
+      });
+    }
+  } catch (error) {
+    onError(error);
+  }
+
   return async () => {
     controller.abort();
     try {
-      await compactionHook.dispose();
+      await commandRegistration?.dispose();
     } finally {
       try {
-        await router.dispose();
+        await compactionHook.dispose();
       } finally {
-        await backfillTask;
+        try {
+          await router.dispose();
+        } finally {
+          await backfillTask;
+        }
       }
     }
   };

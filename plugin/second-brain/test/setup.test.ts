@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { defaultConfig } from '../config.ts';
-import { setupPlugin, type SetupContext } from '../setup.ts';
+import { setupPlugin, type RememberCommandEditor, type SetupContext } from '../setup.ts';
 import type { EventLike } from '../events.ts';
 import type { SessionMessageLike } from '../types.ts';
 
@@ -40,10 +40,13 @@ async function waitFor(condition: () => Promise<boolean>, label: string) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function fakeContext() {
+function fakeContext(options: { failCommand?: boolean } = {}) {
   const store = new Map<string, unknown>();
   const listeners = new Set<(event: EventLike) => void>();
   let compaction: ((event: { sessionID: string }) => Promise<void>) | undefined;
+  let commandDisposed = false;
+  const commands: Array<Parameters<RememberCommandEditor['add']>[0]> = [];
+  const syntheticMessages: string[] = [];
 
   const ctx: SetupContext = {
     app: { version: '2.2.5' },
@@ -59,6 +62,9 @@ function fakeContext() {
           },
         };
       },
+      synthetic: async ({ text }) => {
+        syntheticMessages.push(text);
+      },
     },
     storage: {
       get: async (key) => store.get(key),
@@ -68,6 +74,17 @@ function fakeContext() {
     },
     vcs: {
       get: async () => ({ data: { branch: { current: 'main' } } }),
+    },
+    command: {
+      transform: async (callback) => {
+        if (options.failCommand) throw new Error('command host unavailable');
+        callback({ add: (definition) => commands.push(definition) });
+        return {
+          dispose: async () => {
+            commandDisposed = true;
+          },
+        };
+      },
     },
     event: {
       subscribe({ signal }) {
@@ -98,6 +115,11 @@ function fakeContext() {
 
   return {
     ctx,
+    commands,
+    syntheticMessages,
+    get commandDisposed() {
+      return commandDisposed;
+    },
     emit(event: EventLike) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -212,4 +234,77 @@ test('backfill can be disabled for a launch', async () => {
     await cleanup();
     await rm(spoolDir, { recursive: true, force: true });
   }
+});
+
+test('the /remember command posts a memory and reports it in the session', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext();
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const base = options(spoolDir);
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...base,
+    config: { ...base.config, serverURL: 'https://brain.example.test' },
+    backfill: { enabled: false },
+    remember: {
+      readFile: async () => `sb_opencode_${'A'.repeat(43)}`,
+      fetch: async (input, init) => {
+        requests.push({ url: String(input), init });
+        return new Response(
+          JSON.stringify({ record_id: 5, job_id: null, status: 'indexed', replayed: false }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    },
+  });
+  try {
+    const command = fake.commands.find((candidate) => candidate.name === 'remember');
+    assert.ok(command, 'remember command is registered');
+
+    await command.execute({ sessionID: 'ses_1', prompt: { text: 'backup bucket is meme' } });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.url, 'https://brain.example.test/api/v1/memories');
+    const headers = new Headers(requests[0]?.init?.headers);
+    assert.equal(headers.get('Authorization'), `Bearer sb_opencode_${'A'.repeat(43)}`);
+    const body = JSON.parse(String(requests[0]?.init?.body));
+    assert.equal(body.raw_text, 'backup bucket is meme');
+    assert.equal(body.project_key, 'github.com/SeRGei93/meme');
+    assert.equal(fake.syntheticMessages.length, 1);
+    assert.match(fake.syntheticMessages[0] ?? '', /#5/);
+  } finally {
+    await cleanup();
+    await rm(spoolDir, { recursive: true, force: true });
+  }
+});
+
+test('a failing command registration does not disable capture', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext({ failCommand: true });
+  const errors: unknown[] = [];
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...options(spoolDir),
+    backfill: { enabled: false },
+    onError: (error) => errors.push(error),
+  });
+  try {
+    await flushTasks();
+    fake.emit({ type: 'session.execution.failed', data: { sessionID: 'ses_01JABCDEF' } });
+    await waitFor(async () => (await readdir(spoolDir)).length === 1, 'bundle');
+    assert.ok(errors.some((error) => String(error).includes('command host unavailable')));
+  } finally {
+    await cleanup();
+    await rm(spoolDir, { recursive: true, force: true });
+  }
+});
+
+test('cleanup disposes the remember command registration', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext();
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...options(spoolDir),
+    backfill: { enabled: false },
+  });
+  await cleanup();
+  assert.equal(fake.commandDisposed, true);
+  await rm(spoolDir, { recursive: true, force: true });
 });

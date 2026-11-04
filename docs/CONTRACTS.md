@@ -133,13 +133,16 @@ Scope аддитивны. Для эндпоинта с несколькими sc
 | MCP `stats` | | ✓ | | | |
 | MCP `remember` | | | ✓ | | |
 
+Команда `/remember` пишет через HTTP `POST /api/v1/memories`, поэтому одному
+клиенту `opencode` нужны и MCP-scope, и `ingest`; onboarding выдаёт такой набор.
+
 Рекомендуемые наборы:
 
 | Клиент | Kind | Scope |
 |---|---|---|
 | macOS app (upload) | `opencode` | `ingest` |
 | macOS app (UI) | `ui` | `ui`, `admin` |
-| OpenCode plugin MCP | `opencode` | `mcp:read`, `mcp:write` |
+| OpenCode plugin MCP + `/remember` | `opencode` | `ingest`, `mcp:read`, `mcp:write` |
 | Jarvis | `jarvis` | `ingest`, `mcp:read`, `mcp:write` |
 
 ## 5. Retry-политика

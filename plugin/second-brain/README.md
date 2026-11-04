@@ -1,8 +1,8 @@
 # Second Brain — OpenCode plugin
 
 Тонкий TypeScript-плагин OpenCode: собирает нормализованные сессии и складывает
-JSON-бандлы в локальный spool. Сеть плагин не использует — отправкой занимается
-`SecondBrain.app` (M5).
+JSON-бандлы в локальный spool. Отправкой бандлов занимается `SecondBrain.app`
+(M5). В сеть плагин ходит только по явной команде `/remember`.
 
 ## Что делает
 
@@ -13,6 +13,7 @@ JSON-бандлы в локальный spool. Сеть плагин не исп
 | `session.execution.failed` | пишет бандл сразу, `final=true` |
 | `session.execution.interrupted` | пишет бандл сразу, `final=true` |
 | первый запуск | backfill существующей истории: `session.list` с пагинацией, `final=true` |
+| `/remember <текст>` | `POST /api/v1/memories` и сообщение с id записи в сессии |
 
 Повторный `idle` сбрасывает таймер. События одной сессии обрабатываются
 последовательно. Если содержимое не изменилось, второй бандл не пишется; смена
@@ -45,6 +46,24 @@ OpenCode) ожидающий `idle`-бандл сбрасывается на д�
 процесса между этими шагами может дать повторный бандл; сервер дедуплицирует
 бандлы по `external_id`/`content_hash`. Backfill и live-события сериализуются
 по `sessionID`, так что одновременный захват одной сессии пишет один бандл.
+
+## Команда `/remember`
+
+`/remember <текст>` сохраняет заметку в общей памяти:
+
+- берёт `server_url` из `~/.config/second-brain/config.json` и токен из
+  `~/.config/second-brain/mcp_token` (scope `ingest`; его пишет onboarding);
+- вызывает `POST /api/v1/memories` с `raw_text` и `project_key` (те же правила,
+  что у capture: git remote → `opencode:<projectID>` → `local:...`); `source`
+  сервер выводит из токена, `external_id` — из хеша текста. `occurred_at` не
+  передаётся: он входит в content-hash, и отметка времени ломала бы
+  идемпотентность повторной команды;
+- показывает результат synthetic-сообщением в сессии: «Запомнено: запись #N»
+  или «Уже в памяти»;
+- ошибки (нет конфига/токена, повреждённый `mcp_token`, 401/403, 429 с
+  `Retry-After`, 5xx с `request_id`, сеть) показываются текстом, команда не
+  бросает исключение и не блокирует сессию;
+- таймаут 5 секунд, затем «Сервер недоступен: истекло время ожидания».
 
 Нормализация: user/assistant текст и tool calls (`name`, `command`, `path`).
 Reasoning и вывод инструментов не сохраняются. Текст и поля обрезаются по
@@ -83,6 +102,7 @@ cp -R plugin/second-brain ~/.config/opencode/plugins/second-brain
 
 ```json
 {
+  "server_url": "https://meme.aimerce.by",
   "spool_dir": "/Users/serg/.config/second-brain/spool",
   "idle_debounce_ms": 240000,
   "max_message_chars": 200000,
@@ -92,6 +112,7 @@ cp -R plugin/second-brain ~/.config/opencode/plugins/second-brain
 }
 ```
 
+- `server_url` нужен только команде `/remember`; его пишет onboarding.
 - `spool_dir` по умолчанию `~/.config/second-brain/spool`; `~` раскрывается.
 - `idle_debounce_ms` по умолчанию `240000` (4 минуты, окно 3–5 минут из тикета).
 - Остальные лимиты совпадают с `docs/spool.schema.json`; значения больше схемных
@@ -123,7 +144,7 @@ npm run typecheck
 ```
 
 Тесты на seam'ах: `loadConfig`, `normalizeSession`, `resolveProjectKey`,
-`writeBundle`, `createCapture`, `createEventRouter`, `runBackfill`. Интеграционный тест пишет
+`writeBundle`, `createCapture`, `createEventRouter`, `runBackfill`, `remember`. Интеграционный тест пишет
 бандл реальным writer'ом и валидирует его через `tools/validate-spool.mjs`.
 
-Не входит в этот тикет: команда `/remember` (#16).
+
