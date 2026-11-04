@@ -36,6 +36,11 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
+                if !appState.isConfigured {
+                    Button("Настроить…") {
+                        appState.presentOnboardingForRotation()
+                    }
+                }
                 SettingsLink {
                     Text("Settings…")
                 }
@@ -56,7 +61,6 @@ struct ContentView: View {
         )) {
             OnboardingView()
                 .environment(appState)
-                .interactiveDismissDisabled(!appState.isConfigured)
         }
     }
 }

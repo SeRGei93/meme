@@ -147,9 +147,71 @@ final class AppStateOnboardingTests: XCTestCase {
         let connected = await state.connect(serverURLText: "brain.example.com", adminToken: "admin")
 
         XCTAssertFalse(connected)
-        XCTAssertEqual(state.onboardingError, "Укажите полный URL сервера, например https://brain.example.com")
+        XCTAssertEqual(state.onboardingError, OnboardingError.invalidServerURL.errorDescription)
         XCTAssertFalse(state.isConfigured)
         XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testConnectStoresTokensAndClosesOnboarding() async throws {
+        StubURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod ?? "GET", path) {
+            case ("GET", "/health"):
+                return .init(body: Data(Fixtures.healthJSON.utf8))
+            case ("GET", "/api/v1/clients"):
+                return .init(body: Data(#"{"items":[]}"#.utf8))
+            case ("POST", "/api/v1/clients"):
+                let body = try XCTUnwrap(request.bodyData)
+                let spec = try JSONDecoder().decode(CreateClientRequest.self, from: body)
+                let id: Int64 = spec.kind == .opencode ? 1 : (spec.kind == .jarvis ? 2 : 3)
+                let client = ClientInfo(
+                    id: id, name: spec.name, kind: spec.kind.rawValue,
+                    scopes: spec.scopes.map(\.rawValue),
+                    source: spec.kind == .opencode ? "opencode" : nil,
+                    createdAt: Date(timeIntervalSince1970: 0),
+                    lastSeenAt: nil, revokedAt: nil
+                )
+                let response = CreateClientResponse(client: client, token: "sb_\(spec.kind.rawValue)_\(id)")
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return .init(status: 201, body: try encoder.encode(response))
+            case ("GET", "/api/v1/stats"):
+                return .init(body: Data(Fixtures.statsJSON.utf8))
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+
+        let state = AppState(
+            configStore: ConfigStore(directory: directory),
+            keychain: keychain,
+            session: StubURLProtocol.session()
+        )
+
+        let connected = await state.connect(
+            serverURLText: "https://brain.example.test",
+            adminToken: "admin-secret"
+        )
+
+        XCTAssertTrue(connected)
+        XCTAssertTrue(state.isConfigured)
+        XCTAssertFalse(state.isOnboardingPresented)
+        XCTAssertNil(state.onboardingError)
+        XCTAssertNil(state.errorMessage)
+        XCTAssertEqual(state.statusText, "Подключено")
+        XCTAssertEqual(state.health?.version, "0aa1357")
+        XCTAssertEqual(
+            try keychain.value(for: KeychainStore.Account.ui),
+            "sb_ui_3"
+        )
+        XCTAssertEqual(
+            try ConfigStore(directory: directory).load()?.serverURL,
+            URL(string: "https://brain.example.test")
+        )
+        XCTAssertEqual(
+            try MCPTokenFile(directory: directory).read(),
+            "sb_opencode_1"
+        )
     }
 
     func testBootstrapWithStoredConfigVerifiesToken() async throws {

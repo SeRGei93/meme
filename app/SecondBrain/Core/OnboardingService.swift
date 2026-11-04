@@ -2,39 +2,53 @@ import Foundation
 
 enum OnboardingError: Error, Equatable {
     case invalidServerURL
+    case invalidAdminToken
     case serverUnhealthy
-    case missingUIToken
+    case missingToken
 }
 
 extension OnboardingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidServerURL:
-            return "Укажите полный URL сервера, например https://brain.example.com"
+            return "Укажите URL сервера: https://… (http разрешён только для localhost)"
+        case .invalidAdminToken:
+            return "Admin token отклонён сервером. Проверьте BRAIN_ADMIN_TOKEN"
         case .serverUnhealthy:
             return "Сервер работает, но база данных недоступна. Попробуйте позже"
-        case .missingUIToken:
-            return "Сервер не выдал токен приложения"
+        case .missingToken:
+            return "Сервер не выдал один из токенов"
         }
     }
 }
 
-/// Runs the first-launch setup: checks the server, rotates the three clients,
-/// verifies the UI token, then persists tokens to the Keychain, `config.json`
-/// and `mcp_token`. Nothing is written locally unless every step succeeded.
+/// Runs the first-launch setup and token rotation.
+///
+/// Rotation follows `CONTRACTS.md` §4.1: create new clients, persist their
+/// tokens, verify them, and only then revoke the previous clients. If anything
+/// fails, the previous Keychain/config/mcp_token state is restored and the
+/// freshly created clients are revoked. Only clients recorded in `app_clients`
+/// are ever revoked by this installation.
 struct OnboardingService {
     struct Result: Equatable, Sendable {
         let health: Health
         let serverURL: URL
-        /// Client name → id, handy for logs and the Settings screen.
+        /// Client name → id.
         let clientIDs: [String: Int64]
     }
 
     private struct Spec {
-        let name: String
+        let role: String
+        let baseName: String
         let kind: ClientKind
         let scopes: [Scope]
         let account: String
+    }
+
+    private struct Snapshot {
+        let config: AppConfig?
+        let tokens: [String: String?]
+        let mcpToken: String?
     }
 
     private let configStore: ConfigStore
@@ -42,91 +56,135 @@ struct OnboardingService {
     private let tokenFile: MCPTokenFile
     private let hostName: String
     private let session: URLSession
+    private let makeSuffix: @Sendable () -> String
 
     init(
         configStore: ConfigStore = ConfigStore(),
         keychain: KeychainStore = KeychainStore(),
         tokenFile: MCPTokenFile? = nil,
         hostName: String = ProcessInfo.processInfo.hostName,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        makeSuffix: @escaping @Sendable () -> String = {
+            String(UUID().uuidString.prefix(8)).lowercased()
+        }
     ) {
         self.configStore = configStore
         self.keychain = keychain
         self.tokenFile = tokenFile ?? MCPTokenFile(directory: configStore.directory)
         self.hostName = hostName
         self.session = session
+        self.makeSuffix = makeSuffix
     }
 
     func run(serverURL: URL, adminToken: String) async throws -> Result {
         let admin = APIClient(baseURL: serverURL, token: adminToken, session: session)
+        let snapshot = takeSnapshot()
 
         let health = try await admin.health()
         guard health.status == "ok" else {
             throw OnboardingError.serverUnhealthy
         }
 
+        let existing = try await withAdminErrors {
+            try await admin.listClients()
+        }
+        var activeNames = Set(existing.items.filter { $0.revokedAt == nil }.map(\.name))
+
+        var pending = snapshot.config?.pendingRevocations ?? []
+        pending = await retryPendingRevocations(pending, admin: admin)
+
+        let previousClients = snapshot.config?.appClients ?? [:]
         let specs = clientSpecs()
-        try await revokeExistingClients(specs: specs, admin: admin)
 
         var created: [(spec: Spec, response: CreateClientResponse)] = []
-        for spec in specs {
-            let response = try await createRotatingIfNeeded(spec: spec, admin: admin)
-            created.append((spec, response))
+        do {
+            for spec in specs {
+                let response = try await withAdminErrors {
+                    try await createClient(spec: spec, activeNames: activeNames, admin: admin)
+                }
+                activeNames.insert(response.client.name)
+                created.append((spec, response))
+            }
+
+            guard let ui = created.first(where: { $0.spec.role == "ui" }) else {
+                throw OnboardingError.missingToken
+            }
+
+            // Verify the token the app will actually use before touching disk.
+            let uiClient = APIClient(baseURL: serverURL, token: ui.response.token, session: session)
+            _ = try await uiClient.stats()
+
+            try persist(created: created, snapshot: snapshot, serverURL: serverURL, pending: pending)
+        } catch {
+            await revokeCreatedClients(created.map(\.response.client.id), admin: admin)
+            restore(snapshot)
+            throw error
         }
 
-        guard let ui = created.first(where: { $0.spec.kind == .ui }) else {
-            throw OnboardingError.missingUIToken
+        pending = await revokePreviousClients(
+            previousClients,
+            excluding: Set(created.map(\.response.client.id)),
+            pending: pending,
+            admin: admin
+        )
+        if !pending.isEmpty || snapshot.config?.pendingRevocations != nil {
+            var config = (try? configStore.load()) ?? AppConfig()
+            config.pendingRevocations = pending.isEmpty ? nil : pending
+            try? configStore.save(config)
         }
-        guard let opencode = created.first(where: { $0.spec.kind == .opencode }) else {
-            throw OnboardingError.missingUIToken
-        }
-
-        // Verify the token the app will actually use before persisting anything.
-        let uiClient = APIClient(baseURL: serverURL, token: ui.response.token, session: session)
-        _ = try await uiClient.stats()
-
-        for item in created {
-            try keychain.setValue(item.response.token, for: item.spec.account)
-        }
-        try configStore.save(AppConfig(serverURL: serverURL))
-        try tokenFile.write(opencode.response.token)
 
         var ids: [String: Int64] = [:]
         for item in created {
-            ids[item.spec.name] = item.response.client.id
+            ids[item.response.client.name] = item.response.client.id
         }
         return Result(health: health, serverURL: serverURL, clientIDs: ids)
     }
+
+    // MARK: - URL
 
     static func validateServerURL(_ raw: String) throws -> URL {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed),
               let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http",
-              url.host != nil else {
+              let host = url.host else {
             throw OnboardingError.invalidServerURL
         }
-        return url
+        if scheme == "https" {
+            return url
+        }
+        if scheme == "http", isLoopback(host) {
+            return url
+        }
+        throw OnboardingError.invalidServerURL
     }
+
+    static func isLoopback(_ host: String) -> Bool {
+        ["localhost", "127.0.0.1", "::1"].contains(host.lowercased())
+    }
+
+    // MARK: - Clients
 
     private func clientSpecs() -> [Spec] {
         let slug = Self.hostSlug(hostName)
         let opencodeName = slug.isEmpty ? "opencode" : "opencode-\(slug)"
         return [
             Spec(
-                name: opencodeName,
+                role: "opencode",
+                baseName: opencodeName,
                 kind: .opencode,
                 scopes: [.ingest, .mcpRead, .mcpWrite],
                 account: KeychainStore.Account.opencode
             ),
             Spec(
-                name: "jarvis",
+                role: "jarvis",
+                baseName: "jarvis",
                 kind: .jarvis,
                 scopes: [.ingest, .mcpRead, .mcpWrite],
                 account: KeychainStore.Account.jarvis
             ),
             Spec(
-                name: "second-brain-app",
+                role: "ui",
+                baseName: "second-brain-app",
                 kind: .ui,
                 scopes: [.ui, .admin],
                 account: KeychainStore.Account.ui
@@ -134,40 +192,157 @@ struct OnboardingService {
         ]
     }
 
-    private func revokeExistingClients(specs: [Spec], admin: APIClient) async throws {
-        let names = Set(specs.map(\.name))
-        let existing = try await admin.listClients()
-        for client in existing.items where names.contains(client.name) && client.revokedAt == nil {
-            try await admin.revokeClient(id: client.id)
+    /// Picks a free name for the new client. If the base name is taken (for
+    /// example by another machine or a manually created client), a unique suffix
+    /// is used instead of revoking somebody else's token.
+    private func createClient(
+        spec: Spec,
+        activeNames: Set<String>,
+        admin: APIClient
+    ) async throws -> CreateClientResponse {
+        var name = activeNames.contains(spec.baseName)
+            ? "\(spec.baseName)-\(sanitizedSuffix())"
+            : spec.baseName
+
+        for _ in 0..<4 {
+            do {
+                return try await admin.createClient(
+                    CreateClientRequest(name: name, kind: spec.kind, scopes: spec.scopes)
+                )
+            } catch let error as APIError {
+                guard case .server(let status, _, _, _) = error, status == 409 else {
+                    throw error
+                }
+                name = "\(spec.baseName)-\(sanitizedSuffix())"
+            }
         }
+        throw OnboardingError.missingToken
     }
 
-    /// A `409 conflict` means another process created the same name between the
-    /// list and the create call. Revoke it and retry once.
-    private func createRotatingIfNeeded(spec: Spec, admin: APIClient) async throws -> CreateClientResponse {
-        let request = CreateClientRequest(name: spec.name, kind: spec.kind, scopes: spec.scopes)
-        do {
-            return try await admin.createClient(request)
-        } catch let error as APIError {
-            guard case .server(let status, _, _, _) = error, status == 409 else {
-                throw error
-            }
-            let existing = try await admin.listClients()
-            for client in existing.items where client.name == spec.name && client.revokedAt == nil {
-                try await admin.revokeClient(id: client.id)
-            }
-            return try await admin.createClient(request)
-        }
+    private func sanitizedSuffix() -> String {
+        let raw = makeSuffix().lowercased()
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789")
+        let cleaned = String(raw.filter { allowed.contains($0) }.prefix(8))
+        return cleaned.isEmpty ? "rot" : cleaned
     }
 
-    /// `MacBook.local` → `macbook`; keeps names inside `[A-Za-z0-9._:-]`.
+    /// `MacBook.local` → `macbook`; ASCII only, ≤ 60 chars.
     static func hostSlug(_ hostName: String) -> String {
         let short = hostName.split(separator: ".").first.map(String.init) ?? hostName
-        let allowed = CharacterSet.alphanumerics
-        return short
-            .lowercased()
-            .components(separatedBy: allowed.inverted)
-            .filter { !$0.isEmpty }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789")
+        let mapped = short.lowercased().map { allowed.contains($0) ? $0 : "-" }
+        let collapsed = String(mapped)
+            .split(separator: "-", omittingEmptySubsequences: true)
             .joined(separator: "-")
+        return String(collapsed.prefix(60))
+    }
+
+    // MARK: - Persistence
+
+    private func takeSnapshot() -> Snapshot {
+        var tokens: [String: String?] = [:]
+        for account in KeychainStore.Account.all {
+            tokens[account] = try? keychain.value(for: account)
+        }
+        return Snapshot(
+            config: try? configStore.load(),
+            tokens: tokens,
+            mcpToken: try? tokenFile.read()
+        )
+    }
+
+    private func persist(
+        created: [(spec: Spec, response: CreateClientResponse)],
+        snapshot: Snapshot,
+        serverURL: URL,
+        pending: [Int64]
+    ) throws {
+        for item in created {
+            try keychain.setValue(item.response.token, for: item.spec.account)
+        }
+
+        var config = snapshot.config ?? AppConfig()
+        config.serverURL = serverURL
+        config.appClients = Dictionary(uniqueKeysWithValues: created.map {
+            ($0.spec.role, StoredClient(id: $0.response.client.id, name: $0.response.client.name))
+        })
+        config.pendingRevocations = pending.isEmpty ? nil : pending
+        try configStore.save(config)
+
+        guard let opencode = created.first(where: { $0.spec.role == "opencode" }) else {
+            throw OnboardingError.missingToken
+        }
+        try tokenFile.write(opencode.response.token)
+    }
+
+    private func restore(_ snapshot: Snapshot) {
+        for (account, value) in snapshot.tokens {
+            if let value {
+                try? keychain.setValue(value, for: account)
+            } else {
+                try? keychain.deleteValue(for: account)
+            }
+        }
+        if let config = snapshot.config {
+            try? configStore.save(config)
+        } else {
+            try? configStore.delete()
+        }
+        if let token = snapshot.mcpToken {
+            try? tokenFile.write(token)
+        } else {
+            try? tokenFile.delete()
+        }
+    }
+
+    // MARK: - Revocation
+
+    private func retryPendingRevocations(_ ids: [Int64], admin: APIClient) async -> [Int64] {
+        var failed: [Int64] = []
+        for id in ids {
+            do {
+                try await admin.revokeClient(id: id)
+            } catch APIError.notFound {
+                continue
+            } catch {
+                failed.append(id)
+            }
+        }
+        return failed
+    }
+
+    private func revokePreviousClients(
+        _ previous: [String: StoredClient],
+        excluding newIDs: Set<Int64>,
+        pending: [Int64],
+        admin: APIClient
+    ) async -> [Int64] {
+        var pending = pending
+        var seen = Set(pending)
+        for stored in previous.values where !newIDs.contains(stored.id) && !seen.contains(stored.id) {
+            seen.insert(stored.id)
+            do {
+                try await admin.revokeClient(id: stored.id)
+            } catch APIError.notFound {
+                continue
+            } catch {
+                pending.append(stored.id)
+            }
+        }
+        return pending
+    }
+
+    private func revokeCreatedClients(_ ids: [Int64], admin: APIClient) async {
+        for id in ids {
+            try? await admin.revokeClient(id: id)
+        }
+    }
+
+    private func withAdminErrors<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch let error as APIError where error.requiresReauthentication {
+            throw OnboardingError.invalidAdminToken
+        }
     }
 }

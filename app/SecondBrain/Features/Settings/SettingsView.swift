@@ -35,15 +35,12 @@ struct SettingsView: View {
                 Button("Повернуть токены…") {
                     appState.presentOnboardingForRotation()
                     openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.activate()
                 }
             }
 
             Section("Status") {
                 LabeledContent("State", value: appState.statusText)
-                if let serverURL = appState.serverURL {
-                    LabeledContent("Server", value: serverURL.absoluteString)
-                }
                 if let health = appState.health {
                     LabeledContent("Version", value: health.version)
                     LabeledContent("Schema", value: String(health.schemaVersion))

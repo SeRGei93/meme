@@ -60,10 +60,8 @@ struct OnboardingView: View {
 
                 Spacer()
 
-                if appState.isConfigured {
-                    Button("Cancel") {
-                        appState.isOnboardingPresented = false
-                    }
+                Button("Закрыть") {
+                    appState.isOnboardingPresented = false
                 }
             }
 

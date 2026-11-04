@@ -21,6 +21,14 @@ struct MCPTokenFile {
 
     func write(_ token: String) throws {
         let directory = fileURL.deletingLastPathComponent()
+        let temporaryURL = directory.appendingPathComponent("mcp_token.tmp", isDirectory: false)
+        var installed = false
+        defer {
+            if !installed {
+                try? fileManager.removeItem(at: temporaryURL)
+            }
+        }
+
         do {
             if !fileManager.fileExists(atPath: directory.path) {
                 try fileManager.createDirectory(
@@ -30,7 +38,6 @@ struct MCPTokenFile {
                 )
             }
 
-            let temporaryURL = directory.appendingPathComponent("mcp_token.tmp", isDirectory: false)
             try? fileManager.removeItem(at: temporaryURL)
             guard fileManager.createFile(
                 atPath: temporaryURL.path,
@@ -45,9 +52,21 @@ struct MCPTokenFile {
             } else {
                 try fileManager.moveItem(at: temporaryURL, to: fileURL)
             }
-            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            // `replaceItemAt` can preserve the old item's mode; make the final
+            // mode explicit and fail rather than leave a readable token behind.
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            installed = true
         } catch let error as MCPTokenFileError {
             throw error
+        } catch {
+            throw MCPTokenFileError.writeFailed
+        }
+    }
+
+    func delete() throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        do {
+            try fileManager.removeItem(at: fileURL)
         } catch {
             throw MCPTokenFileError.writeFailed
         }

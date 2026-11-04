@@ -56,14 +56,18 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
+        #if DEBUG
         // UI tests need a deterministic window without onboarding.
         if ProcessInfo.processInfo.environment["SECOND_BRAIN_SKIP_ONBOARDING"] == "1" {
             isConfigured = true
             isOnboardingPresented = false
             return
         }
+        #endif
 
         let stored = try? configStore.load()
+        serverURL = stored?.serverURL
+
         guard let url = stored?.serverURL,
               let token = try? keychain.value(for: KeychainStore.Account.ui) else {
             isConfigured = false
@@ -72,16 +76,21 @@ final class AppState {
             return
         }
 
-        serverURL = url
         isConfigured = true
         isOnboardingPresented = false
         await checkHealth(using: APIClient(baseURL: url, session: session))
         await loadStats(using: APIClient(baseURL: url, token: token, session: session))
+        if requiresReauthentication {
+            // A stored token was revoked (for example a half-finished rotation):
+            // send the user straight to the rotation form.
+            isOnboardingPresented = true
+        }
     }
 
     /// Runs onboarding and persists tokens only after the server verified them.
     @discardableResult
     func connect(serverURLText: String, adminToken: String) async -> Bool {
+        guard !onboardingBusy else { return false }
         onboardingBusy = true
         onboardingError = nil
         defer { onboardingBusy = false }

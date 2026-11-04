@@ -8,6 +8,7 @@ final class OnboardingServiceTests: XCTestCase {
     private var keychain: KeychainStore!
     private var service: OnboardingService!
     private let serverURL = URL(string: "https://brain.example.test")!
+    private let adminToken = "admin-secret"
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -46,76 +47,132 @@ final class OnboardingServiceTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testRunCreatesThreeClientsAndPersistsEverything() async throws {
+    func testFirstRunCreatesClientsAndPersistsEverything() async throws {
         try ConfigStore(directory: directory).save(
             AppConfig(spoolDir: "/tmp/second-brain-spool", idleDebounceMilliseconds: 300_000)
         )
 
-        let result = try await service.run(serverURL: serverURL, adminToken: "admin-secret")
+        let result = try await service.run(serverURL: serverURL, adminToken: adminToken)
 
         XCTAssertEqual(result.health.status, "ok")
         XCTAssertEqual(result.serverURL, serverURL)
 
-        XCTAssertEqual(server.created.map(\.name), [
-            "opencode-macbook", "jarvis", "second-brain-app",
-        ])
+        XCTAssertEqual(server.created.count, 3)
         XCTAssertEqual(server.created.map(\.kind), [.opencode, .jarvis, .ui])
         XCTAssertEqual(server.created[0].scopes, [.ingest, .mcpRead, .mcpWrite])
         XCTAssertEqual(server.created[1].scopes, [.ingest, .mcpRead, .mcpWrite])
         XCTAssertEqual(server.created[2].scopes, [.ui, .admin])
 
-        // The existing active client with the same name is revoked first.
-        XCTAssertTrue(server.revoked.contains(7))
+        // The legacy `opencode-macbook` client is left alone; the new client
+        // gets a unique suffix instead.
+        XCTAssertTrue(server.created[0].name.hasPrefix("opencode-macbook-"))
+        XCTAssertEqual(server.created[1].name, "jarvis")
+        XCTAssertEqual(server.created[2].name, "second-brain-app")
+        XCTAssertTrue(server.revoked.isEmpty)
+        XCTAssertTrue(server.isActive(id: 7))
 
         let opencodeToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode))
         let jarvisToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis))
         let uiToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui))
-        XCTAssertEqual(opencodeToken, server.token(kind: "opencode"))
-        XCTAssertEqual(jarvisToken, server.token(kind: "jarvis"))
-        XCTAssertEqual(uiToken, server.token(kind: "ui"))
+        XCTAssertEqual(opencodeToken, server.activeToken(kind: "opencode"))
+        XCTAssertEqual(jarvisToken, server.activeToken(kind: "jarvis"))
+        XCTAssertEqual(uiToken, server.activeToken(kind: "ui"))
         XCTAssertEqual(server.lastStatsToken, uiToken)
 
         let config = try XCTUnwrap(try ConfigStore(directory: directory).load())
         XCTAssertEqual(config.serverURL, serverURL)
         XCTAssertEqual(config.spoolDir, "/tmp/second-brain-spool")
         XCTAssertEqual(config.idleDebounceMilliseconds, 300_000)
+        XCTAssertEqual(config.appClients?.count, 3)
+        XCTAssertEqual(config.appClients?["ui"]?.id, server.client(named: "second-brain-app")?.id)
 
         let tokenFile = MCPTokenFile(directory: directory)
         XCTAssertEqual(try tokenFile.read(), opencodeToken)
         XCTAssertEqual(try permissions(of: tokenFile.fileURL), 0o600)
+
+        // The bootstrap admin token must never be persisted locally.
+        XCTAssertNotEqual(opencodeToken, adminToken)
+        XCTAssertNotEqual(jarvisToken, adminToken)
+        XCTAssertNotEqual(uiToken, adminToken)
+        let configText = try String(contentsOf: configFileURL, encoding: .utf8)
+        XCTAssertFalse(configText.contains(adminToken))
+        XCTAssertFalse(try XCTUnwrap(try tokenFile.read()).contains(adminToken))
     }
 
-    func testSecondRunRotatesEveryClient() async throws {
-        _ = try await service.run(serverURL: serverURL, adminToken: "admin-secret")
-        let firstTokens = try [
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode)),
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis)),
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui)),
-        ]
+    func testSecondRunRotatesOwnClientsOnly() async throws {
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+        let firstConfig = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        let firstClients = try XCTUnwrap(firstConfig.appClients)
+        let firstTokens = try tokens()
 
-        let result = try await service.run(serverURL: serverURL, adminToken: "admin-secret")
+        let second = try await service.run(serverURL: serverURL, adminToken: adminToken)
 
         XCTAssertEqual(server.created.count, 6)
-        XCTAssertEqual(Set(server.revoked), Set([7, 1, 2, 3]))
-        XCTAssertEqual(result.clientIDs.count, 3)
+        let secondConfig = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        let secondClients = try XCTUnwrap(secondConfig.appClients)
+        XCTAssertEqual(secondClients.count, 3)
 
-        let secondTokens = try [
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode)),
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis)),
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui)),
-        ]
-        XCTAssertNotEqual(firstTokens, secondTokens)
+        for role in ["opencode", "jarvis", "ui"] {
+            let old = try XCTUnwrap(firstClients[role])
+            let new = try XCTUnwrap(secondClients[role])
+            XCTAssertNotEqual(old.id, new.id)
+            XCTAssertTrue(server.revoked.contains(old.id), "old \(role) client must be revoked")
+            XCTAssertTrue(server.isActive(id: new.id))
+        }
+
+        XCTAssertTrue(server.isActive(id: 7), "legacy client is not ours and must stay active")
+        XCTAssertNotEqual(firstTokens, try tokens())
+        XCTAssertEqual(second.clientIDs.count, 3)
     }
 
-    func testUnauthorizedAdminTokenWritesNothing() async throws {
+    func testFailedRotationKeepsPreviousTokensAndClients() async throws {
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+        let configBefore = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        let tokensBefore = try tokens()
+        let mcpBefore = try XCTUnwrap(try MCPTokenFile(directory: directory).read())
+        let idsBefore = Set(try XCTUnwrap(configBefore.appClients).values.map(\.id))
+
+        server.failCreateKinds = ["ui"]
+
+        await XCTAssertThrowsErrorAsync(
+            try await service.run(serverURL: serverURL, adminToken: adminToken)
+        )
+
+        XCTAssertEqual(try tokens(), tokensBefore)
+        XCTAssertEqual(try MCPTokenFile(directory: directory).read(), mcpBefore)
+        let configAfter = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        XCTAssertEqual(configAfter.appClients, configBefore.appClients)
+        for id in idsBefore {
+            XCTAssertTrue(server.isActive(id: id), "previous client \(id) must survive a failed rotation")
+            XCTAssertFalse(server.revoked.contains(id))
+        }
+
+        // Partially created clients are cleaned up.
+        XCTAssertFalse(server.activeClients.contains { $0.name.hasPrefix("opencode-macbook-") && !idsBefore.contains($0.id) })
+    }
+
+    func testRevokeOfUnknownPreviousClientIsIgnored() async throws {
+        // Simulate a config that points at a client the server no longer knows.
+        try ConfigStore(directory: directory).save(
+            AppConfig(
+                serverURL: serverURL,
+                appClients: ["ui": StoredClient(id: 999, name: "gone")]
+            )
+        )
+
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+
+        let config = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        XCTAssertNil(config.pendingRevocations)
+    }
+
+    func testUnauthorizedAdminTokenMapsToInvalidAdminToken() async throws {
         server.rejectAdmin = true
 
         await XCTAssertThrowsErrorAsync(
             try await service.run(serverURL: serverURL, adminToken: "wrong")
         ) { error in
-            guard case APIError.unauthorized = error else {
-                return XCTFail("expected .unauthorized, got \(error)")
-            }
+            XCTAssertEqual(error as? OnboardingError, .invalidAdminToken)
         }
 
         XCTAssertNil(try keychain.value(for: KeychainStore.Account.ui))
@@ -133,7 +190,7 @@ final class OnboardingServiceTests: XCTestCase {
         """
 
         await XCTAssertThrowsErrorAsync(
-            try await service.run(serverURL: serverURL, adminToken: "admin-secret")
+            try await service.run(serverURL: serverURL, adminToken: adminToken)
         ) { error in
             XCTAssertEqual(error as? OnboardingError, .serverUnhealthy)
         }
@@ -145,7 +202,7 @@ final class OnboardingServiceTests: XCTestCase {
         StubURLProtocol.setHandler { _ in throw URLError(.cannotConnectToHost) }
 
         await XCTAssertThrowsErrorAsync(
-            try await service.run(serverURL: serverURL, adminToken: "admin-secret")
+            try await service.run(serverURL: serverURL, adminToken: adminToken)
         ) { error in
             guard case APIError.transport = error else {
                 return XCTFail("expected .transport, got \(error)")
@@ -154,21 +211,54 @@ final class OnboardingServiceTests: XCTestCase {
         XCTAssertNil(try keychain.value(for: KeychainStore.Account.ui))
     }
 
+    func testServerURLRequiresTLSExceptLoopback() throws {
+        XCTAssertEqual(
+            try OnboardingService.validateServerURL("https://brain.example.com"),
+            URL(string: "https://brain.example.com")
+        )
+        XCTAssertEqual(
+            try OnboardingService.validateServerURL(" http://localhost:8080 "),
+            URL(string: "http://localhost:8080")
+        )
+        XCTAssertThrowsError(try OnboardingService.validateServerURL("http://192.168.1.2:8080"))
+        XCTAssertThrowsError(try OnboardingService.validateServerURL("brain.example.com"))
+    }
+
+    func testHostSlugIsASCIIAndBounded() {
+        XCTAssertEqual(OnboardingService.hostSlug("MacBook-Pro-serg.local"), "macbook-pro-serg")
+        XCTAssertEqual(OnboardingService.hostSlug("Маков.local"), "")
+        XCTAssertLessThanOrEqual(OnboardingService.hostSlug(String(repeating: "a", count: 200)).count, 60)
+    }
+
+    private var configFileURL: URL {
+        directory.appendingPathComponent("config.json")
+    }
+
+    private func tokens() throws -> [String] {
+        try [
+            XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode)),
+            XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis)),
+            XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui)),
+        ]
+    }
+
     private func permissions(of url: URL) throws -> Int {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue
     }
 }
 
+
 // MARK: - Fake server
 
 private final class FakeServer: @unchecked Sendable {
     private let lock = NSLock()
-    private var activeClients: [ClientInfo]
-    private var createdClients: [CreateClientRequest] = []
+    private var clients: [ClientInfo]
+    private var tokens: [Int64: String] = [:]
+    private var nextID: Int64
+    private var createdSpecs: [CreateClientRequest] = []
     private var revokedIDs: [Int64] = []
-    private var tokensByKind: [String: String] = [:]
-    private var nextID: Int64 = 1
+    private var statsToken: String?
 
     var healthStatus = 200
     var healthBody = """
@@ -177,17 +267,35 @@ private final class FakeServer: @unchecked Sendable {
      "database":{"status":"ok","fts5":true}}
     """
     var rejectAdmin = false
-    private(set) var lastStatsToken: String?
+    var failCreateKinds: Set<String> = []
 
     init(activeClients: [ClientInfo]) {
-        self.activeClients = activeClients
+        clients = activeClients
+        nextID = (activeClients.map(\.id).max() ?? 0) + 1
     }
 
-    var created: [CreateClientRequest] { lock.withLock { createdClients } }
+    var created: [CreateClientRequest] { lock.withLock { createdSpecs } }
     var revoked: [Int64] { lock.withLock { revokedIDs } }
+    var lastStatsToken: String? { lock.withLock { statsToken } }
+    var activeClients: [ClientInfo] { lock.withLock { clients.filter { $0.revokedAt == nil } } }
 
-    func token(kind: String) -> String? {
-        lock.withLock { tokensByKind[kind] }
+    func isActive(id: Int64) -> Bool {
+        lock.withLock { clients.first { $0.id == id }?.revokedAt == nil }
+    }
+
+    func client(named name: String) -> ClientInfo? {
+        lock.withLock { clients.first { $0.name == name } }
+    }
+
+    func activeToken(kind: String) -> String? {
+        lock.withLock {
+            guard let client = clients.last(where: {
+                $0.kind == kind && $0.revokedAt == nil && tokens[$0.id] != nil
+            }) else {
+                return nil
+            }
+            return tokens[client.id]
+        }
     }
 
     func handle(_ request: URLRequest) throws -> StubURLProtocol.Response {
@@ -200,20 +308,36 @@ private final class FakeServer: @unchecked Sendable {
         }
 
         if rejectAdmin {
-            return .init(status: 401, body: Data(#"{"error":{"code":"unauthorized","message":"bad admin"}}"#.utf8))
+            return unauthorized("bad admin")
         }
 
         switch (method, path) {
         case ("GET", "/api/v1/clients"):
-            return .init(body: try encode(ClientList(items: lock.withLock { activeClients })))
+            let items = lock.withLock { clients }
+            return .init(body: try encode(ClientList(items: items)))
 
         case ("POST", "/api/v1/clients"):
             let body = try XCTUnwrap(request.bodyData)
             let spec = try JSONDecoder().decode(CreateClientRequest.self, from: body)
-            let client = lock.withLock { () -> ClientInfo in
+
+            if failCreateKinds.contains(spec.kind.rawValue) {
+                return .init(
+                    status: 500,
+                    body: Data(#"{"error":{"code":"internal_error","message":"boom"}}"#.utf8)
+                )
+            }
+
+            if lock.withLock({ clients.contains { $0.name == spec.name && $0.revokedAt == nil } }) {
+                return .init(
+                    status: 409,
+                    body: Data(#"{"error":{"code":"conflict","message":"name already exists"}}"#.utf8)
+                )
+            }
+
+            let (client, token) = lock.withLock { () -> (ClientInfo, String) in
                 let id = nextID
                 nextID += 1
-                createdClients.append(spec)
+                createdSpecs.append(spec)
                 let info = ClientInfo(
                     id: id,
                     name: spec.name,
@@ -224,11 +348,11 @@ private final class FakeServer: @unchecked Sendable {
                     lastSeenAt: nil,
                     revokedAt: nil
                 )
-                tokensByKind[spec.kind.rawValue] = "sb_\(spec.kind.rawValue)_\(id)"
-                activeClients.append(info)
-                return info
+                let token = "sb_\(spec.kind.rawValue)_\(id)"
+                clients.append(info)
+                tokens[id] = token
+                return (info, token)
             }
-            let token = lock.withLock { tokensByKind[client.kind] } ?? ""
             return .init(
                 status: 201,
                 body: try encode(CreateClientResponse(client: client, token: token))
@@ -236,24 +360,51 @@ private final class FakeServer: @unchecked Sendable {
 
         case ("DELETE", _) where path.hasPrefix("/api/v1/clients/"):
             let id = try XCTUnwrap(Int64(path.split(separator: "/").last ?? ""))
-            lock.withLock {
+            let found = lock.withLock { () -> Bool in
+                guard let index = clients.firstIndex(where: { $0.id == id }),
+                      clients[index].revokedAt == nil else {
+                    return false
+                }
+                let old = clients[index]
+                clients[index] = ClientInfo(
+                    id: old.id, name: old.name, kind: old.kind, scopes: old.scopes,
+                    source: old.source, createdAt: old.createdAt,
+                    lastSeenAt: old.lastSeenAt, revokedAt: Date()
+                )
+                tokens.removeValue(forKey: id)
                 revokedIDs.append(id)
-                activeClients.removeAll { $0.id == id }
+                return true
             }
-            return .init(status: 204, body: Data())
+            return found ? .init(status: 204, body: Data()) : notFound()
 
         case ("GET", "/api/v1/stats"):
             let token = authorization?.replacingOccurrences(of: "Bearer ", with: "")
-            lock.withLock { lastStatsToken = token }
-            let expected = lock.withLock { tokensByKind["ui"] }
-            guard token == expected else {
-                return .init(status: 401, body: Data(#"{"error":{"code":"unauthorized","message":"bad ui token"}}"#.utf8))
+            let valid = lock.withLock {
+                clients.contains { $0.kind == "ui" && $0.revokedAt == nil && tokens[$0.id] == token }
             }
+            guard valid else {
+                return unauthorized("bad ui token")
+            }
+            lock.withLock { statsToken = token }
             return .init(body: Data(Self.statsJSON.utf8))
 
         default:
-            return .init(status: 404, body: Data())
+            return notFound()
         }
+    }
+
+    private func unauthorized(_ message: String) -> StubURLProtocol.Response {
+        .init(
+            status: 401,
+            body: Data("{\"error\":{\"code\":\"unauthorized\",\"message\":\"\(message)\"}}".utf8)
+        )
+    }
+
+    private func notFound() -> StubURLProtocol.Response {
+        .init(
+            status: 404,
+            body: Data(#"{"error":{"code":"not_found","message":"client not found"}}"#.utf8)
+        )
     }
 
     private func encode<T: Encodable>(_ value: T) throws -> Data {
