@@ -68,6 +68,7 @@ func New(opts Options) http.Handler {
 		{method: http.MethodGet, path: "/health", handler: s.handleHealth},
 		{method: http.MethodPost, path: ingestPath, handler: s.requireScopes(auth.ScopeIngest)(s.handleIngest)},
 		{method: http.MethodGet, path: recordsPath + "/", oneSegment: true, handler: s.requireScopes(auth.ScopeUI, auth.ScopeMCPRead)(s.handleGetRecord)},
+		{method: http.MethodGet, path: searchPath, handler: s.requireScopes(auth.ScopeUI, auth.ScopeMCPRead)(s.handleSearch)},
 		{method: http.MethodGet, path: clientsPath, handler: s.requireScopes(auth.ScopeAdmin)(s.handleListClients)},
 		{method: http.MethodPost, path: clientsPath, handler: s.requireScopes(auth.ScopeAdmin)(s.handleCreateClient)},
 		{method: http.MethodDelete, path: clientsPath + "/", oneSegment: true, handler: s.requireScopes(auth.ScopeAdmin)(s.handleRevokeClient)},
