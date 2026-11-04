@@ -52,7 +52,7 @@ final class AppStateTests: XCTestCase {
          "time":"2026-11-04T19:30:10Z",
          "database":{"status":"error","fts5":true,"error":"disk full"}}
         """.utf8)
-        StubURLProtocol.setHandler { _ in .init(body: body) }
+        StubURLProtocol.setHandler { _ in .init(status: 503, body: body) }
         let state = AppState()
 
         await state.checkHealth(using: client)

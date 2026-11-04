@@ -1,9 +1,12 @@
 import Foundation
 
 /// The subset of `~/.config/second-brain/config.json` the app owns. The file is
-/// shared with the OpenCode plugin, so keys stay snake_case.
+/// shared with the OpenCode plugin, so keys stay snake_case and saving merges
+/// into the existing JSON instead of replacing it.
 struct AppConfig: Codable, Equatable, Sendable {
-    var serverURL: URL
+    /// `nil` until onboarding has connected to a server. The plugin-only file has
+    /// no `server_url` yet and must still load.
+    var serverURL: URL?
     var spoolDir: String?
     var idleDebounceMilliseconds: Int?
     var maxMessageChars: Int?
@@ -12,7 +15,7 @@ struct AppConfig: Codable, Equatable, Sendable {
     var maxToolFieldChars: Int?
 
     init(
-        serverURL: URL,
+        serverURL: URL? = nil,
         spoolDir: String? = nil,
         idleDebounceMilliseconds: Int? = nil,
         maxMessageChars: Int? = nil,
@@ -43,6 +46,15 @@ struct AppConfig: Codable, Equatable, Sendable {
 enum ConfigStoreError: Error, Equatable {
     case invalidConfig
     case writeFailed
+}
+
+extension ConfigStoreError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfig: return "Файл config.json повреждён"
+        case .writeFailed: return "Не удалось сохранить config.json"
+        }
+    }
 }
 
 /// Reads and writes `config.json`. Writes are atomic, the directory is private
@@ -86,24 +98,64 @@ struct ConfigStore {
         }
     }
 
+    /// Writes the app-owned keys, preserving every other key already present in
+    /// the shared file (plugin settings, fields added by newer versions).
     func save(_ config: AppConfig) throws {
         do {
-            if !fileManager.fileExists(atPath: directory.path) {
-                try fileManager.createDirectory(
-                    at: directory,
-                    withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700]
-                )
+            try ensureDirectory()
+            let encoded = try JSONEncoder().encode(config)
+            var object = existingObject() ?? [:]
+            if let patch = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] {
+                object.merge(patch) { _, new in new }
             }
-
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            let data = try encoder.encode(config)
-            try data.write(to: fileURL, options: .atomic)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            let data = try JSONSerialization.data(
+                withJSONObject: object,
+                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            )
+            try writeAtomically(data)
+        } catch let error as ConfigStoreError {
+            throw error
         } catch {
             throw ConfigStoreError.writeFailed
         }
+    }
+
+    private func ensureDirectory() throws {
+        if !fileManager.fileExists(atPath: directory.path) {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } else {
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+    }
+
+    private func existingObject() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func writeAtomically(_ data: Data) throws {
+        let temporaryURL = directory.appendingPathComponent("config.json.tmp", isDirectory: false)
+        try? fileManager.removeItem(at: temporaryURL)
+
+        // Create the temp file with the final mode, so the rename never exposes
+        // a world-readable config.json.
+        guard fileManager.createFile(
+            atPath: temporaryURL.path,
+            contents: data,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw ConfigStoreError.writeFailed
+        }
+
+        if fileManager.fileExists(atPath: fileURL.path) {
+            _ = try fileManager.replaceItemAt(fileURL, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: fileURL)
+        }
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
 }

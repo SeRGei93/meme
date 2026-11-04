@@ -41,6 +41,8 @@ final class APIClientTests: XCTestCase {
         XCTAssertTrue(health.database.fts5)
         XCTAssertEqual(health.database.status, "ok")
         XCTAssertNil(health.database.error)
+        // Go sends nanosecond precision; the value must survive decoding.
+        XCTAssertEqual(health.time.timeIntervalSince1970, 1_793_820_610, accuracy: 1)
     }
 
     func testHealthIsPublicAndSendsNoAuthorizationHeader() async throws {
@@ -114,23 +116,114 @@ final class APIClientTests: XCTestCase {
         }
 
         await XCTAssertThrowsErrorAsync(try await client.search(query: "x")) { error in
-            guard case APIError.rateLimited(let retryAfter) = error else {
+            guard case APIError.rateLimited(let retryAfter, let requestID) = error else {
                 return XCTFail("expected .rateLimited, got \(error)")
             }
             XCTAssertEqual(retryAfter, 7)
+            XCTAssertNil(requestID)
             XCTAssertTrue((error as? APIError)?.isRetryable == true)
         }
+    }
+
+    func testRateLimitedFallsBackToEnvelopeDetailsAndKeepsRequestID() async {
+        let body = Data("""
+        {"error":{"code":"rate_limited","message":"slow down","request_id":"req_9",
+          "details":{"retry_after_seconds":12}}}
+        """.utf8)
+        StubURLProtocol.setHandler { _ in .init(status: 429, body: body) }
+
+        await XCTAssertThrowsErrorAsync(try await client.search(query: "x")) { error in
+            guard case APIError.rateLimited(let retryAfter, let requestID) = error else {
+                return XCTFail("expected .rateLimited, got \(error)")
+            }
+            XCTAssertEqual(retryAfter, 12)
+            XCTAssertEqual(requestID, "req_9")
+        }
+    }
+
+    func testForbiddenAsksForReauthentication() async {
+        StubURLProtocol.setHandler { _ in .init(status: 403, body: Data()) }
+
+        await XCTAssertThrowsErrorAsync(try await client.search(query: "x")) { error in
+            guard case APIError.forbidden(let requestID) = error else {
+                return XCTFail("expected .forbidden, got \(error)")
+            }
+            XCTAssertNil(requestID)
+            XCTAssertEqual((error as? APIError)?.requiresReauthentication, true)
+        }
+    }
+
+    func testNotFoundIsNotRetryable() async {
+        StubURLProtocol.setHandler { _ in .init(status: 404, body: Data()) }
+
+        await XCTAssertThrowsErrorAsync(try await client.record(id: 7)) { error in
+            guard case APIError.notFound = error else {
+                return XCTFail("expected .notFound, got \(error)")
+            }
+            XCTAssertEqual((error as? APIError)?.isRetryable, false)
+        }
+    }
+
+    func testAuthenticatedRequestWithoutTokenFailsBeforeNetwork() async {
+        let anonymous = APIClient(
+            configuration: .init(baseURL: baseURL),
+            session: StubURLProtocol.session()
+        )
+
+        await XCTAssertThrowsErrorAsync(try await anonymous.stats()) { error in
+            guard case APIError.unauthorized(let requestID) = error else {
+                return XCTFail("expected .unauthorized, got \(error)")
+            }
+            XCTAssertNil(requestID)
+        }
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testHealthDecodes503BodyAsDegraded() async throws {
+        let body = Data("""
+        {"status":"degraded","version":"1","schema_version":3,
+         "time":"2026-11-04T19:30:10Z",
+         "database":{"status":"error","fts5":false,"error":"database is locked"}}
+        """.utf8)
+        StubURLProtocol.setHandler { _ in .init(status: 503, body: body) }
+
+        let health = try await client.health()
+
+        XCTAssertEqual(health.status, "degraded")
+        XCTAssertEqual(health.database.status, "error")
+        XCTAssertEqual(health.database.error, "database is locked")
+    }
+
+    func testSearchSendsProjectKey() async throws {
+        StubURLProtocol.setHandler { _ in
+            .init(body: Data(#"{"items":[],"total":0,"query":"x","limit":10}"#.utf8))
+        }
+
+        _ = try await client.search(query: "x", projectKey: "opencode:meme")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "project_key" })?.value, "opencode:meme")
+        XCTAssertNil(components.queryItems?.first(where: { $0.name == "project" }))
     }
 
     func testServerErrorMarkedRetryable() async {
         StubURLProtocol.setHandler { _ in .init(status: 503, body: Data()) }
 
-        await XCTAssertThrowsErrorAsync(try await client.health()) { error in
+        await XCTAssertThrowsErrorAsync(try await client.stats()) { error in
             guard case APIError.server(let status, _, _, _) = error else {
                 return XCTFail("expected .server, got \(error)")
             }
             XCTAssertEqual(status, 503)
             XCTAssertTrue((error as? APIError)?.isRetryable == true)
+        }
+    }
+
+    func testNotImplementedIsNotRetryable() async {
+        StubURLProtocol.setHandler { _ in .init(status: 501, body: Data()) }
+
+        await XCTAssertThrowsErrorAsync(try await client.stats()) { error in
+            XCTAssertEqual((error as? APIError)?.isRetryable, false)
         }
     }
 

@@ -56,6 +56,37 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(fileMode, 0o600)
     }
 
+    func testPluginOnlyConfigLoadsWithoutServerURL() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("""
+        {"spool_dir":"/tmp/spool","idle_debounce_ms":300000,"max_messages":500}
+        """.utf8).write(to: store.fileURL)
+
+        let config = try XCTUnwrap(try store.load())
+
+        XCTAssertNil(config.serverURL)
+        XCTAssertEqual(config.spoolDir, "/tmp/spool")
+        XCTAssertEqual(config.idleDebounceMilliseconds, 300_000)
+        XCTAssertEqual(config.maxMessages, 500)
+    }
+
+    func testSavingPreservesPluginAndUnknownKeys() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("""
+        {"spool_dir":"/tmp/spool","idle_debounce_ms":300000,"schema":2}
+        """.utf8).write(to: store.fileURL)
+
+        try store.save(AppConfig(serverURL: URL(string: "https://brain.example.test")!))
+
+        let data = try Data(contentsOf: store.fileURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["server_url"] as? String, "https://brain.example.test")
+        XCTAssertEqual(object["spool_dir"] as? String, "/tmp/spool")
+        XCTAssertEqual(object["idle_debounce_ms"] as? Int, 300_000)
+        XCTAssertEqual(object["schema"] as? Int, 2)
+    }
+
     func testMalformedFileThrowsInvalidConfig() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("{not json".utf8).write(to: store.fileURL)

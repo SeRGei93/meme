@@ -24,17 +24,29 @@ struct APIClient: Sendable {
 
     // MARK: - Endpoints
 
+    /// `/health` is public and, by contract, returns the same `Health` body with
+    /// HTTP 503 when the database is unavailable. Both statuses are decoded.
     func health() async throws -> Health {
-        try await send(path: "health", authenticated: false)
+        let request = try makeRequest(path: "health", query: [], authenticated: false)
+        let (http, data) = try await perform(request)
+
+        if http.statusCode == 200 || http.statusCode == 503,
+           let health = try? Self.decoder.decode(Health.self, from: data) {
+            return health
+        }
+        if http.statusCode == 200 || http.statusCode == 503 {
+            throw APIError.decoding
+        }
+        throw Self.mapError(status: http.statusCode, headers: http.allHeaderFields, body: data)
     }
 
-    func search(query: String, limit: Int? = nil, project: String? = nil) async throws -> SearchResponse {
+    func search(query: String, limit: Int? = nil, projectKey: String? = nil) async throws -> SearchResponse {
         var items = [URLQueryItem(name: "q", value: query)]
         if let limit {
             items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
-        if let project {
-            items.append(URLQueryItem(name: "project", value: project))
+        if let projectKey {
+            items.append(URLQueryItem(name: "project_key", value: projectKey))
         }
         return try await send(path: "api/v1/search", query: items)
     }
@@ -59,20 +71,7 @@ struct APIClient: Sendable {
         authenticated: Bool = true
     ) async throws -> Response {
         let request = try makeRequest(path: path, query: query, authenticated: authenticated)
-        let data: Data
-        let response: URLResponse
-
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch let error as URLError {
-            throw APIError.transport(localized: error.localizedDescription, retryable: error.code != .cancelled)
-        } catch {
-            throw APIError.transport(localized: error.localizedDescription, retryable: true)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse(status: -1)
-        }
+        let (http, data) = try await perform(request)
 
         guard (200..<300).contains(http.statusCode) else {
             throw Self.mapError(status: http.statusCode, headers: http.allHeaderFields, body: data)
@@ -85,16 +84,32 @@ struct APIClient: Sendable {
         }
     }
 
+    private func perform(_ request: URLRequest) async throws -> (HTTPURLResponse, Data) {
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse(status: -1)
+            }
+            return (http, data)
+        } catch let error as APIError {
+            throw error
+        } catch let error as URLError {
+            throw APIError.transport(localized: error.localizedDescription, retryable: error.code != .cancelled)
+        } catch {
+            throw APIError.transport(localized: error.localizedDescription, retryable: true)
+        }
+    }
+
     private func makeRequest(path: String, query: [URLQueryItem], authenticated: Bool) throws -> URLRequest {
         let url = configuration.baseURL.appendingPathComponent(path)
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            throw APIError.invalidResponse(status: -1)
+            throw APIError.invalidURL
         }
         if !query.isEmpty {
             components.queryItems = query
         }
         guard let finalURL = components.url else {
-            throw APIError.invalidResponse(status: -1)
+            throw APIError.invalidURL
         }
 
         var request = URLRequest(url: finalURL, timeoutInterval: configuration.timeout)
@@ -123,11 +138,9 @@ struct APIClient: Sendable {
         case 404:
             return .notFound(requestID: requestID)
         case 429:
-            let header = headers.first { key, _ in
-                String(describing: key).caseInsensitiveCompare("Retry-After") == .orderedSame
-            }?.value
-            let retryAfter = (header as? String).flatMap(Int.init)
-            return .rateLimited(retryAfter: retryAfter)
+            let header = headerValue("Retry-After", in: headers)
+            let retryAfter = header.flatMap(parseRetryAfter) ?? envelope?.error.details?.retryAfterSeconds
+            return .rateLimited(retryAfter: retryAfter, requestID: requestID)
         default:
             return .server(
                 status: status,
@@ -138,7 +151,27 @@ struct APIClient: Sendable {
         }
     }
 
-    static let decoder: JSONDecoder = {
+    private static func headerValue(_ name: String, in headers: [AnyHashable: Any]) -> String? {
+        for (key, value) in headers where String(describing: key).caseInsensitiveCompare(name) == .orderedSame {
+            return value as? String
+        }
+        return nil
+    }
+
+    /// `Retry-After` is either delay-seconds or an HTTP-date.
+    private static func parseRetryAfter(_ raw: String) -> Int? {
+        if let seconds = Int(raw) {
+            return max(0, seconds)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: raw) else { return nil }
+        return max(0, Int(date.timeIntervalSinceNow.rounded(.up)))
+    }
+
+    nonisolated(unsafe) static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -155,17 +188,16 @@ struct APIClient: Sendable {
     }()
 }
 
-/// Go marshals `time.Time` with nanosecond precision, which `ISO8601DateFormatter`
-/// does not always accept. Try the common shapes and truncate the fraction when
-/// needed.
+/// Go marshals `time.Time` with nanosecond precision. Current Foundation parses
+/// that directly; the truncation path stays as a guard for older toolchains.
 enum APIDate {
-    private static let fractional: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static let whole: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let whole: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

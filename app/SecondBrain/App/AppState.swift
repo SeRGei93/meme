@@ -3,6 +3,8 @@ import Observation
 
 /// Shared UI state. One observable object feeds the window, menu bar and
 /// Settings, so a failed health check or a revoked token is visible everywhere.
+/// Main-actor isolated: SwiftUI reads these properties while rendering.
+@MainActor
 @Observable
 final class AppState {
     enum Connection: Equatable {
@@ -39,6 +41,7 @@ final class AppState {
                 ? "Подключено"
                 : "Сервер работает с ограничениями"
         } catch {
+            health = nil
             apply(error)
         }
     }
