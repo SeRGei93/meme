@@ -104,12 +104,16 @@ final class AppStateTests: XCTestCase {
 @MainActor
 final class AppStateOnboardingTests: XCTestCase {
     private var directory: URL!
+    private var openCodeDirectory: URL!
+    private var pluginSource: URL!
     private var keychain: KeychainStore!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("second-brain-state-\(UUID().uuidString)", isDirectory: true)
+        openCodeDirectory = directory.appendingPathComponent("opencode", isDirectory: true)
+        pluginSource = directory.appendingPathComponent("missing-plugin", isDirectory: true)
         keychain = KeychainStore(service: "com.serg.secondbrain.tests.\(UUID().uuidString)")
         StubURLProtocol.reset()
     }
@@ -119,6 +123,8 @@ final class AppStateOnboardingTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
         StubURLProtocol.reset()
         keychain = nil
+        pluginSource = nil
+        openCodeDirectory = nil
         directory = nil
         try super.tearDownWithError()
     }
@@ -127,7 +133,9 @@ final class AppStateOnboardingTests: XCTestCase {
         let state = AppState(
             configStore: ConfigStore(directory: directory),
             keychain: keychain,
-            session: StubURLProtocol.session()
+            session: StubURLProtocol.session(),
+            openCodeDirectory: openCodeDirectory,
+            pluginSourceDirectory: pluginSource
         )
 
         await state.bootstrap()
@@ -141,7 +149,9 @@ final class AppStateOnboardingTests: XCTestCase {
         let state = AppState(
             configStore: ConfigStore(directory: directory),
             keychain: keychain,
-            session: StubURLProtocol.session()
+            session: StubURLProtocol.session(),
+            openCodeDirectory: openCodeDirectory,
+            pluginSourceDirectory: pluginSource
         )
 
         let connected = await state.connect(serverURLText: "brain.example.com", adminToken: "admin")
@@ -185,7 +195,9 @@ final class AppStateOnboardingTests: XCTestCase {
         let state = AppState(
             configStore: ConfigStore(directory: directory),
             keychain: keychain,
-            session: StubURLProtocol.session()
+            session: StubURLProtocol.session(),
+            openCodeDirectory: openCodeDirectory,
+            pluginSourceDirectory: pluginSource
         )
 
         let connected = await state.connect(
@@ -228,7 +240,9 @@ final class AppStateOnboardingTests: XCTestCase {
         let state = AppState(
             configStore: ConfigStore(directory: directory),
             keychain: keychain,
-            session: StubURLProtocol.session()
+            session: StubURLProtocol.session(),
+            openCodeDirectory: openCodeDirectory,
+            pluginSourceDirectory: pluginSource
         )
         await state.bootstrap()
 

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 final class SecondBrainUITests: XCTestCase {
@@ -55,6 +56,90 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertEqual(String(describing: toggle.value ?? "nil"), initial)
     }
 
+    func testSettingsInstallsTheOpenCodePluginAndShowsItsStatus() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-plugin-\(UUID().uuidString)", isDirectory: true)
+        let source = root.appendingPathComponent("SecondBrainPlugin", isDirectory: true)
+        let openCode = root.appendingPathComponent("opencode", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        try Data("export default { id: 'second-brain.capture' }\n".utf8)
+            .write(to: source.appendingPathComponent("index.ts"))
+        try Data("export function setup() {}\n".utf8)
+            .write(to: source.appendingPathComponent("setup.ts"))
+        try Data(#"{"name":"second-brain-opencode-plugin","exports":{".":"./index.ts"}}"#.utf8)
+            .write(to: source.appendingPathComponent("package.json"))
+        try Data(#"{"server_url":"https://brain.example.test"}"#.utf8)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = configuredApp(
+            openCodeDirectory: openCode,
+            pluginSource: source,
+            configDirectory: configDirectory
+        )
+        app.launch()
+
+        let settingsButton = app.buttons["Settings…"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 10))
+        settingsButton.click()
+
+        let settings = app.windows["Second Brain Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+
+        let status = settings.staticTexts["settings.pluginStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let notInstalled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Не установлен"),
+            object: status
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [notInstalled], timeout: 10), .completed)
+
+        let install = settings.buttons["settings.installPlugin"]
+        XCTAssertTrue(install.waitForExistence(timeout: 10))
+        install.click()
+
+        let installed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Установлен"),
+            object: status
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [installed], timeout: 10), .completed)
+        let installedPlugin = openCode.appendingPathComponent("plugins/second-brain")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: installedPlugin.appendingPathComponent("index.ts").path)
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: installedPlugin.appendingPathComponent("setup.ts").path),
+            "a partial bundle must not look installed"
+        )
+        XCTAssertEqual(status.value as? String, "Установлен")
+
+        let configURL = openCode.appendingPathComponent("opencode.json")
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any]
+        )
+        let mcp = try XCTUnwrap(object["mcp"] as? [String: Any])
+        let servers = try XCTUnwrap(mcp["servers"] as? [String: Any])
+        let entry = try XCTUnwrap(servers["second-brain"] as? [String: Any])
+        XCTAssertEqual(entry["url"] as? String, "https://brain.example.test/mcp")
+        XCTAssertEqual(entry["oauth"] as? Bool, false)
+        let headers = try XCTUnwrap(entry["headers"] as? [String: Any])
+        XCTAssertEqual(
+            headers["Authorization"] as? String,
+            "Bearer {file:\(configDirectory.appendingPathComponent("mcp_token").path)}"
+        )
+
+        let reinstall = settings.buttons["settings.installPlugin"]
+        let readyToReinstall = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Переустановить"),
+            object: reinstall
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [readyToReinstall], timeout: 10), .completed)
+        reinstall.click()
+        XCTAssertEqual(status.value as? String, "Установлен")
+    }
+
     func testOnboardingShowsConnectionFormOnCleanInstall() throws {
         let app = XCUIApplication()
         let directory = FileManager.default.temporaryDirectory
@@ -67,9 +152,22 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.buttons["onboarding.connect"].exists)
     }
 
-    private func configuredApp() -> XCUIApplication {
+    private func configuredApp(
+        openCodeDirectory: URL? = nil,
+        pluginSource: URL? = nil,
+        configDirectory: URL? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
+        if let openCodeDirectory {
+            app.launchEnvironment["SECOND_BRAIN_OPENCODE_DIR"] = openCodeDirectory.path
+        }
+        if let pluginSource {
+            app.launchEnvironment["SECOND_BRAIN_PLUGIN_SOURCE"] = pluginSource.path
+        }
+        if let configDirectory {
+            app.launchEnvironment["SECOND_BRAIN_CONFIG_DIR"] = configDirectory.path
+        }
         return app
     }
 }

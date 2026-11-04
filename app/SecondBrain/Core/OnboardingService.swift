@@ -161,7 +161,9 @@ struct OnboardingService {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed),
               let scheme = url.scheme?.lowercased(),
-              let host = url.host else {
+              let host = url.host,
+              url.query == nil,
+              url.fragment == nil else {
             throw OnboardingError.invalidServerURL
         }
         if scheme == "https" {

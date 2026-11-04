@@ -71,28 +71,54 @@ Reasoning и вывод инструментов не сохраняются. Т
 
 ## Установка
 
-Приложение ставит плагин в `~/.config/opencode/plugins/second-brain/` (M4).
+Приложение ставит плагин в `~/.config/opencode/plugins/second-brain/` (M4) и
+само прописывает MCP-сервер в глобальный `~/.config/opencode/opencode.json(c)`.
+OpenCode обнаруживает глобальные плагины в `~/.config/opencode/plugins/`
+автоматически, поэтому добавлять путь в `plugins` не нужно.
+
 Вручную:
 
 ```bash
-mkdir -p ~/.config/opencode/plugins
-cp -R plugin/second-brain ~/.config/opencode/plugins/second-brain
+mkdir -p ~/.config/opencode/plugins/second-brain
+rsync -a --exclude node_modules --exclude test --exclude package-lock.json \
+  plugin/second-brain/ ~/.config/opencode/plugins/second-brain/
 ```
 
-Добавь путь в глобальный `~/.config/opencode/opencode.json(c)`. Плагин — это
-каталог с `package.json` и `exports`, поэтому указывается абсолютный путь:
+Плагин не импортирует `@opencode/plugin` ни в рантайме, ни в тестах (`index.ts`
+экспортирует обычный объект), поэтому `node_modules` в каталоге плагина не
+нужны и зависимость не устанавливается.
+
+Если плагин лежит не в стандартном каталоге, укажи путь явно:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["/Users/<you>/.config/opencode/plugins/second-brain"]
+  "plugins": ["/absolute/path/to/second-brain"]
 }
 ```
 
-Конфигурация читается при загрузке плагина. После правки файла выполни `/reload`
-(или перезапусти OpenCode), чтобы настройки применились. Зависимость
-`@opencode/plugin` ставится в каталог плагина (`npm install --omit=dev` внутри
-него), сам OpenCode её не подставляет.
+Конфигурация читается при загрузке плагина. После правки файла OpenCode
+перезагружается сам; принудительно — `/reload`.
+
+MCP-сервер, который пишет приложение:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "second-brain": {
+        "type": "remote",
+        "url": "https://meme.aimerce.by/mcp",
+        "oauth": false,
+        "codemode": false,
+        "headers": {
+          "Authorization": "Bearer {file:~/.config/second-brain/mcp_token}"
+        }
+      }
+    }
+  }
+}
+```
 
 ## Конфигурация
 

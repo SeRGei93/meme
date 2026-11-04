@@ -247,6 +247,8 @@ final class OnboardingServiceTests: XCTestCase {
         )
         XCTAssertThrowsError(try OnboardingService.validateServerURL("http://192.168.1.2:8080"))
         XCTAssertThrowsError(try OnboardingService.validateServerURL("brain.example.com"))
+        XCTAssertThrowsError(try OnboardingService.validateServerURL("https://brain.example.com?token=leak"))
+        XCTAssertThrowsError(try OnboardingService.validateServerURL("https://brain.example.com#fragment"))
     }
 
     func testHostSlugIsASCIIAndBounded() {

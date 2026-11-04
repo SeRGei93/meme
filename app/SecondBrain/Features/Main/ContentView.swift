@@ -28,6 +28,10 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Text(appState.integrationSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("main.integrationSummary")
             if let errorMessage = appState.errorMessage {
                 Text(errorMessage)
                     .font(.caption)

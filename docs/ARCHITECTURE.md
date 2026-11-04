@@ -465,6 +465,8 @@ app/
       UploadQueue.swift
       ConfigStore.swift
       PluginInstaller.swift
+      OpenCodeConfig.swift
+      OpenCodePaths.swift
       Models.swift
 ```
 
@@ -986,6 +988,13 @@ MCP endpoint: `https://brain.example.com/mcp`.
 ```
 
 `codemode: false` нужен, чтобы `remember` и `search` были видны агенту как обычные инструменты.
+
+Этот блок пишет `SecondBrain.app` при установке плагина. Токен остаётся в
+`mcp_token`, в конфиге только `{file:...}`. Файл может быть JSONC: приложение
+разбирает комментарии и trailing comma, сохраняет чужие ключи/серверы, а уже
+корректный блок не перезаписывает. Глобальные плагины OpenCode находит в
+`~/.config/opencode/plugins/` автоматически; `plugins` в конфиге нужен только
+для нестандартного пути.
 
 ## 9.4 Скоупы токенов
 
