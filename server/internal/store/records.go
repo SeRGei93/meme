@@ -126,10 +126,15 @@ func (s *Store) IngestSession(ctx context.Context, params IngestParams) (IngestR
 }
 
 func ingestSessionTx(ctx context.Context, tx *sql.Tx, params preparedIngest) (IngestResult, error) {
-	if replayed, ok, err := checkIdempotency(ctx, tx, params); err != nil {
+	if replayed, ok, err := checkIdempotency(ctx, tx, params.ClientID, ingestOperation, params.IdempotencyKey, params.requestHash, params.Now); err != nil {
 		return IngestResult{}, err
 	} else if ok {
-		return replayed, nil
+		return IngestResult{
+			RecordID: replayed.RecordID,
+			JobID:    replayed.JobID,
+			Status:   replayed.Status,
+			Replayed: true,
+		}, nil
 	}
 
 	projectID, err := upsertProject(ctx, tx, params.Bundle.ProjectKey, params.Bundle.ProjectPath, params.Now)
@@ -141,70 +146,84 @@ func ingestSessionTx(ctx context.Context, tx *sql.Tx, params preparedIngest) (In
 	if err != nil {
 		return IngestResult{}, err
 	}
-	if err := saveIdempotency(ctx, tx, params, result); err != nil {
+	if err := saveIdempotency(ctx, tx, params.ClientID, ingestOperation, params.IdempotencyKey,
+		params.requestHash, result.RecordID, result.JobID, result.Status, params.Now); err != nil {
 		return IngestResult{}, err
 	}
 	return result, nil
 }
 
-func checkIdempotency(ctx context.Context, tx *sql.Tx, params preparedIngest) (IngestResult, bool, error) {
+// ingestOperation is the idempotency namespace for POST /api/v1/ingest.
+const ingestOperation = "ingest"
+
+// idempotencyEntry is the stored response of a previous request.
+type idempotencyEntry struct {
+	RecordID int64
+	JobID    *int64
+	Status   string
+}
+
+// checkIdempotency returns the stored response when the same Idempotency-Key
+// was used within the TTL. A reused key with a different request body is
+// reported as ErrIdempotencyKeyReused; after the TTL the row is ignored and the
+// operation runs again.
+func checkIdempotency(ctx context.Context, tx *sql.Tx, clientID int64, operation, key, requestHash string, now time.Time) (idempotencyEntry, bool, error) {
 	var (
-		requestHash string
-		recordID    int64
-		jobID       sql.NullInt64
-		status      string
-		createdAt   string
+		storedHash string
+		recordID   int64
+		jobID      sql.NullInt64
+		status     string
+		createdAt  string
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT request_hash, record_id, job_id, status, created_at
 		FROM idempotency_keys
-		WHERE client_id = ? AND operation = 'ingest' AND key = ?`,
-		params.ClientID, params.IdempotencyKey,
-	).Scan(&requestHash, &recordID, &jobID, &status, &createdAt)
+		WHERE client_id = ? AND operation = ? AND key = ?`,
+		clientID, operation, key,
+	).Scan(&storedHash, &recordID, &jobID, &status, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return IngestResult{}, false, nil
+		return idempotencyEntry{}, false, nil
 	}
 	if err != nil {
-		return IngestResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+		return idempotencyEntry{}, false, fmt.Errorf("read idempotency key: %w", err)
 	}
 
 	created, err := parseTime(createdAt)
 	if err != nil {
-		return IngestResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+		return idempotencyEntry{}, false, fmt.Errorf("read idempotency key: %w", err)
 	}
-	if params.Now.Sub(created) > idempotencyTTL {
-		return IngestResult{}, false, nil
+	if now.Sub(created) > idempotencyTTL {
+		return idempotencyEntry{}, false, nil
 	}
-	if requestHash != params.requestHash {
-		return IngestResult{}, false, ErrIdempotencyKeyReused
+	if storedHash != requestHash {
+		return idempotencyEntry{}, false, ErrIdempotencyKeyReused
 	}
 
-	return IngestResult{
+	return idempotencyEntry{
 		RecordID: recordID,
 		JobID:    nullableInt64(jobID),
 		Status:   status,
-		Replayed: true,
 	}, true, nil
 }
 
-func saveIdempotency(ctx context.Context, tx *sql.Tx, params preparedIngest, result IngestResult) error {
-	var jobID any
-	if result.JobID != nil {
-		jobID = *result.JobID
+func saveIdempotency(ctx context.Context, tx *sql.Tx, clientID int64, operation, key, requestHash string, recordID int64, jobID *int64, status string, now time.Time) error {
+	var storedJobID any
+	if jobID != nil {
+		storedJobID = *jobID
 	}
 
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO idempotency_keys
 			(client_id, operation, key, request_hash, record_id, job_id, status, created_at)
-		VALUES (?, 'ingest', ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(client_id, operation, key) DO UPDATE SET
 			request_hash = excluded.request_hash,
 			record_id    = excluded.record_id,
 			job_id       = excluded.job_id,
 			status       = excluded.status,
 			created_at   = excluded.created_at`,
-		params.ClientID, params.IdempotencyKey, params.requestHash,
-		result.RecordID, jobID, result.Status, formatTime(params.Now),
+		clientID, operation, key, requestHash,
+		recordID, storedJobID, status, formatTime(now),
 	)
 	if err != nil {
 		return fmt.Errorf("save idempotency key: %w", err)
@@ -418,23 +437,24 @@ func enqueueIngestJob(ctx context.Context, tx *sql.Tx, params preparedIngest, re
 		return nil, nil
 	}
 
-	id, err := insertIngestJob(ctx, tx, params.ClientID, params.IdempotencyKey, params.Source, params.Bundle.ExternalID, recordID, params.Now)
+	id, err := insertCardJob(ctx, tx, params.ClientID, params.IdempotencyKey, params.Source, params.Bundle.ExternalID, recordID, params.Now, "ingest")
 	if err != nil {
 		return nil, fmt.Errorf("enqueue ingest job: %w", err)
 	}
 	return &id, nil
 }
 
-// insertIngestJob is the single insert path shared by live ingest and the
-// idle-session finalizer. Final card jobs are inserted in the same transaction
-// that stamps records.finalized_at with the same `now`, so created_at is the
-// card version key used by the worker and by terminal job failure.
-func insertIngestJob(ctx context.Context, tx *sql.Tx, clientID int64, idempotencyKey, source, externalID string, recordID int64, now time.Time) (int64, error) {
+// insertCardJob is the single insert path shared by live ingest, memories and
+// the idle-session finalizer. Final card jobs are inserted in the same
+// transaction that stamps records.finalized_at with the same `now`, so
+// created_at is the card version key used by the worker and by terminal job
+// failure.
+func insertCardJob(ctx context.Context, tx *sql.Tx, clientID int64, idempotencyKey, source, externalID string, recordID int64, now time.Time, kind string) (int64, error) {
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_jobs
 			(client_id, idempotency_key, source, external_id, record_id, kind, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'ingest', 'queued', ?, ?)`,
-		clientID, idempotencyKey, source, externalID, recordID,
+		VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+		clientID, idempotencyKey, source, externalID, recordID, kind,
 		formatTime(now), formatTime(now),
 	)
 	if err != nil {

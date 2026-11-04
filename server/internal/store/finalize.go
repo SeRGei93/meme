@@ -81,7 +81,7 @@ func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle ti
 		if affected == 0 {
 			continue
 		}
-		if _, err := insertIngestJob(ctx, tx, session.clientID, "", session.source, session.externalID, session.id, now); err != nil {
+		if _, err := insertCardJob(ctx, tx, session.clientID, "", session.source, session.externalID, session.id, now, "ingest"); err != nil {
 			_ = tx.Rollback()
 			return 0, fmt.Errorf("enqueue finalized record %d: %w", session.id, err)
 		}
