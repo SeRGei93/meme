@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SeRGei93/meme/server/internal/auth"
+	"github.com/SeRGei93/meme/server/internal/mcp"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -46,6 +47,7 @@ type server struct {
 	adminToken string
 	version    string
 	logger     *slog.Logger
+	mcpServer  *mcp.Server
 	routes     []route
 }
 
@@ -64,8 +66,10 @@ func New(opts Options) http.Handler {
 		version:    opts.Version,
 		logger:     opts.Logger,
 	}
+	s.mcpServer = mcp.New(opts.Version, mcpBackend{server: s})
 	s.routes = []route{
 		{method: http.MethodGet, path: "/health", handler: s.handleHealth},
+		{method: http.MethodPost, path: mcpPath, handler: s.requireScopes(auth.ScopeMCPRead, auth.ScopeMCPWrite)(s.handleMCP)},
 		{method: http.MethodPost, path: ingestPath, handler: s.requireScopes(auth.ScopeIngest)(s.handleIngest)},
 		{method: http.MethodPost, path: memoriesPath, handler: s.requireScopes(auth.ScopeIngest)(s.handleCreateMemory)},
 		{method: http.MethodGet, path: recordsPath + "/", oneSegment: true, handler: s.requireScopes(auth.ScopeUI, auth.ScopeMCPRead)(s.handleGetRecord)},
