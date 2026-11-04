@@ -60,53 +60,76 @@ export function createCapture(deps: CaptureDeps): Capture {
   const now = deps.now ?? (() => new Date());
   const newUUID = deps.uuid ?? randomUUID;
   const remoteCache = new Map<string, string | undefined>();
+  const locks = new Map<string, Promise<unknown>>();
 
-  return {
-    async capture(sessionID, options) {
-      const session = await deps.sessions.get({ sessionID });
-      const messages = await deps.sessions.context({ sessionID });
-      const projectPath = session.location?.directory ?? deps.directory;
-
-      const projectKey = resolveProjectKey({
-        remoteUrl: await cachedRemote(findRemote, remoteCache, projectPath),
-        projectID: session.projectID ?? deps.projectID,
-        directory: projectPath,
-        hostname: deps.hostname,
-      });
-
-      let branch: string | undefined;
-      try {
-        branch = await deps.vcs?.branch(projectPath);
-      } catch (error) {
-        // A VCS hiccup must not drop the session; branch is informational.
-        deps.onError?.(error);
-      }
-
-      const uuid = newUUID();
-      const bundle = normalizeSession({
-        bundleId: uuid,
-        session,
-        messages,
-        final: options.final,
-        projectKey,
-        projectPath,
-        branch,
-        opencodeVersion: deps.opencodeVersion,
-        limits: deps.config,
-      });
-      if (!bundle) return { written: false, reason: 'empty' };
-
-      const hash = fingerprint(bundle);
-      const previous = await cursor.get(sessionID);
-      if (previous && previous.fingerprint === hash && (previous.final || !options.final)) {
-        return { written: false, reason: 'unchanged' };
-      }
-
-      const path = await write({ dir: deps.config.spoolDir, bundle, now: now(), uuid });
-      await cursor.set(sessionID, { fingerprint: hash, final: options.final });
-      return { written: true, path };
-    },
+  /**
+   * Live events and backfill can capture the same session at the same time.
+   * Serializing per session means the second caller observes the updated
+   * cursor and skips instead of writing a duplicate bundle.
+   */
+  const serialized = (sessionID: string, options: CaptureOptions): Promise<CaptureResult> => {
+    const previous = locks.get(sessionID) ?? Promise.resolve();
+    const run = previous.then(
+      () => captureSession(sessionID, options),
+      () => captureSession(sessionID, options),
+    );
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    locks.set(sessionID, tail);
+    void tail.then(() => {
+      if (locks.get(sessionID) === tail) locks.delete(sessionID);
+    });
+    return run;
   };
+
+  async function captureSession(sessionID: string, options: CaptureOptions): Promise<CaptureResult> {
+    const session = await deps.sessions.get({ sessionID });
+    const messages = await deps.sessions.context({ sessionID });
+    const projectPath = session.location?.directory ?? deps.directory;
+
+    const projectKey = resolveProjectKey({
+      remoteUrl: await cachedRemote(findRemote, remoteCache, projectPath),
+      projectID: session.projectID ?? deps.projectID,
+      directory: projectPath,
+      hostname: deps.hostname,
+    });
+
+    let branch: string | undefined;
+    try {
+      branch = await deps.vcs?.branch(projectPath);
+    } catch (error) {
+      // A VCS hiccup must not drop the session; branch is informational.
+      deps.onError?.(error);
+    }
+
+    const uuid = newUUID();
+    const bundle = normalizeSession({
+      bundleId: uuid,
+      session,
+      messages,
+      final: options.final,
+      projectKey,
+      projectPath,
+      branch,
+      opencodeVersion: deps.opencodeVersion,
+      limits: deps.config,
+    });
+    if (!bundle) return { written: false, reason: 'empty' };
+
+    const hash = fingerprint(bundle);
+    const previous = await cursor.get(sessionID);
+    if (previous && previous.fingerprint === hash && (previous.final || !options.final)) {
+      return { written: false, reason: 'unchanged' };
+    }
+
+    const path = await write({ dir: deps.config.spoolDir, bundle, now: now(), uuid });
+    await cursor.set(sessionID, { fingerprint: hash, final: options.final });
+    return { written: true, path };
+  }
+
+  return { capture: serialized };
 }
 
 async function cachedRemote(

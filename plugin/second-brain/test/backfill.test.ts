@@ -13,7 +13,7 @@ interface Harness {
   readonly deps: BackfillDeps;
   readonly store: Map<string, unknown>;
   readonly captures: Array<{ id: string; final: boolean }>;
-  readonly listCalls: Array<{ directory: string; limit?: number; cursor?: string }>;
+  readonly listCalls: Array<{ directory: string; limit?: number; cursor?: string; parentID?: string | null }>;
   readonly sleeps: number[];
   readonly errors: unknown[];
 }
@@ -35,6 +35,7 @@ function harness(
     throttleMs?: number;
     sleep?: (ms: number) => Promise<void>;
     signal?: AbortSignal;
+    sessionTime?: number;
   } = {},
 ): Harness {
   const store = new Map<string, unknown>();
@@ -47,14 +48,24 @@ function harness(
   const deps: BackfillDeps = {
     sessions: {
       async list(input) {
-        listCalls.push({ directory: input.directory, limit: input.limit, cursor: input.cursor });
+        listCalls.push({
+          directory: input.directory,
+          limit: input.limit,
+          cursor: input.cursor,
+          parentID: input.parentID,
+        });
         if (options.failPage?.(input.cursor)) {
           throw new Error(`list failed for ${input.cursor ?? 'start'}`);
         }
         const page = pages[input.cursor ?? 'start'];
         if (!page) throw new Error(`unknown cursor ${input.cursor}`);
+        const updated = options.sessionTime ?? SESSION.time.updated;
         return {
-          data: page.ids.map((id) => ({ ...SESSION, id })),
+          data: page.ids.map((id) => ({
+            ...SESSION,
+            id,
+            time: { created: SESSION.time.created, updated },
+          })),
           cursor: { next: page.next },
         };
       },
@@ -72,10 +83,12 @@ function harness(
     },
     storage: {
       async get(key) {
-        return store.get(key);
+        const value = store.get(key);
+        return value === undefined ? undefined : structuredClone(value);
       },
       async set(key, value) {
-        store.set(key, value);
+        // Clone so the in-memory state object cannot hide a missing persist.
+        store.set(key, structuredClone(value));
       },
     },
     directory: '/repo',
@@ -112,6 +125,7 @@ test('backfill walks every page and writes one final bundle per session', async 
 
   assert.deepEqual(h.listCalls.map((call) => call.cursor), [undefined, 'p2', 'p3']);
   assert.ok(h.listCalls.every((call) => call.directory === '/repo'));
+  assert.ok(h.listCalls.every((call) => call.parentID === null));
   assert.deepEqual(
     h.captures.map((capture) => capture.id),
     ['a', 'b', 'c', 'd'],
@@ -199,12 +213,17 @@ test('a failing session does not stop the rest and is retried on the next run', 
   assert.equal(state?.completedAt, undefined, 'failed backfill must retry next launch');
   assert.equal(state?.failed, 1);
 
-  // The next run retries the failed session; already written ones are unchanged.
+  // The next run lists the history again but only re-captures the failed id.
   failB = false;
   const retry = await runBackfill(h.deps);
 
+  assert.deepEqual(h.captures.slice(3).map((capture) => capture.id), ['b']);
   assert.equal(retry.failed, 0);
-  assert.equal(stateFrom(h.store)?.completedAt, '2026-11-04T20:00:00.000Z');
+  assert.equal(retry.sessions, 1);
+  assert.equal(retry.written, 1);
+  const completed = stateFrom(h.store);
+  assert.equal(completed?.completedAt, '2026-11-04T20:00:00.000Z');
+  assert.equal(completed?.pending, undefined);
 });
 
 test('backfill throttles between sessions', async () => {
@@ -215,10 +234,10 @@ test('backfill throttles between sessions', async () => {
 
   await runBackfill(h.deps);
 
-  assert.deepEqual(h.sleeps, [25, 25, 25]);
+  assert.deepEqual(h.sleeps, [25, 25]);
 });
 
-test('a page listing error keeps the backfill incomplete', async () => {
+test('a persistent page listing error keeps the backfill incomplete', async () => {
   const h = harness(
     {
       start: { ids: ['a'], next: 'p2' },
@@ -229,10 +248,11 @@ test('a page listing error keeps the backfill incomplete', async () => {
 
   const result = await runBackfill(h.deps);
 
-  assert.equal(result.pages, 1);
-  assert.equal(h.errors.length, 1);
+  // One restart from the beginning, then the same page fails again.
+  assert.equal(result.pages, 2);
+  assert.equal(h.errors.length, 2);
   assert.equal(stateFrom(h.store)?.completedAt, undefined);
-  assert.deepEqual(h.captures.map((capture) => capture.id), ['a']);
+  assert.deepEqual(h.captures.map((capture) => capture.id), ['a', 'a']);
 });
 
 test('a repeated cursor ends the walk instead of looping forever', async () => {
@@ -246,4 +266,84 @@ test('a repeated cursor ends the walk instead of looping forever', async () => {
   assert.equal(result.pages, 2);
   assert.equal(result.sessions, 2);
   assert.equal(h.listCalls.length, 2);
+  assert.equal(stateFrom(h.store)?.completedAt, undefined);
+  assert.equal(h.errors.length, 1);
+});
+
+test('recent sessions are imported as non-final and let the finalizer close them', async () => {
+  // 5 minutes before "now", inside the server's 30-minute idle window.
+  const h = harness(
+    { start: { ids: ['a', 'b'] } },
+    { sessionTime: Date.parse('2026-11-04T19:55:00Z') },
+  );
+
+  await runBackfill(h.deps);
+
+  assert.deepEqual(
+    h.captures.map((capture) => capture.final),
+    [false, false],
+  );
+});
+
+test('a stale resume cursor is discarded and the walk restarts once', async () => {
+  let failed = false;
+  const h = harness(
+    {
+      start: { ids: ['a'], next: 'dead' },
+      dead: { ids: ['b'] },
+    },
+    {
+      failPage: (cursor) => {
+        if (cursor === 'dead' && !failed) {
+          failed = true;
+          return true;
+        }
+        return false;
+      },
+    },
+  );
+
+  const result = await runBackfill(h.deps);
+
+  assert.deepEqual(
+    h.listCalls.map((call) => call.cursor),
+    [undefined, 'dead', undefined, 'dead'],
+  );
+  assert.equal(result.failed, 0);
+  assert.equal(stateFrom(h.store)?.completedAt, '2026-11-04T20:00:00.000Z');
+  assert.ok(h.errors.length >= 1);
+});
+
+test('a corrupt state marker is ignored instead of skipping or crashing', async () => {
+  const h = harness({ start: { ids: ['a'] } });
+
+  await runBackfill(h.deps);
+  const [key] = [...h.store.keys()];
+  assert.ok(key);
+  h.store.set(key, { version: 2, directory: '/repo', sessions: 'nope' });
+
+  const again = await runBackfill(h.deps);
+
+  assert.equal(again.skipped, false);
+  assert.equal(again.written, 0, 'capture dedupes the already written session');
+  assert.equal(stateFrom(h.store)?.completedAt, '2026-11-04T20:00:00.000Z');
+});
+
+test('a permanently failing session is dropped after three launches', async () => {
+  const h = harness(
+    { start: { ids: ['a', 'b'] } },
+    { failCapture: (id) => id === 'b' },
+  );
+
+  await runBackfill(h.deps);
+  await runBackfill(h.deps);
+  const third = await runBackfill(h.deps);
+
+  assert.equal(stateFrom(h.store)?.completedAt, '2026-11-04T20:00:00.000Z');
+  assert.equal(stateFrom(h.store)?.pending, undefined);
+  assert.equal(h.captures.filter((capture) => capture.id === 'b').length, 3);
+
+  const fourth = await runBackfill(h.deps);
+  assert.equal(fourth.skipped, true);
+  assert.equal(h.captures.filter((capture) => capture.id === 'b').length, 3);
 });

@@ -196,3 +196,20 @@ test('setup backfills existing sessions into the spool', async () => {
     await rm(spoolDir, { recursive: true, force: true });
   }
 });
+
+test('backfill can be disabled for a launch', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext();
+  fake.ctx.session.list = async () => ({ data: [SESSION], cursor: { next: undefined } });
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...options(spoolDir),
+    backfill: { enabled: false },
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal((await readdir(spoolDir)).length, 0);
+  } finally {
+    await cleanup();
+    await rm(spoolDir, { recursive: true, force: true });
+  }
+});
