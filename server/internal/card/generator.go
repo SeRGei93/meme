@@ -48,6 +48,18 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 	if err != nil {
 		return fmt.Errorf("card generator: load record %d: %w", *job.RecordID, err)
 	}
+	// A queued final ingest shares its created_at with the record's
+	// finalized_at. A mismatch means a newer final version already queued its
+	// own job, so this one must not touch the current card.
+	if record.Kind == "session" && (record.FinalizedAt == nil || !record.FinalizedAt.Equal(job.CreatedAt)) {
+		g.logger().Info("skipping stale card job",
+			"record_id", record.ID,
+			"job_id", job.ID,
+			"job_created_at", job.CreatedAt,
+			"finalized_at", record.FinalizedAt,
+		)
+		return nil
+	}
 
 	if g.Client == nil {
 		return g.keepHeuristic(ctx, record, errors.New("LLM client is not configured"))

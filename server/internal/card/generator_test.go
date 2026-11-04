@@ -69,6 +69,16 @@ func openCardStore(t *testing.T) (*store.Store, int64, int64, int64) {
 	return st, result.RecordID, *result.JobID, client.ID
 }
 
+func queuedJob(t *testing.T, st *store.Store, jobID int64) store.Job {
+	t.Helper()
+
+	job, err := st.GetJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("GetJob(%d) error = %v", jobID, err)
+	}
+	return job
+}
+
 func generatedCardJSON() string {
 	return strings.ReplaceAll(validCardJSON(), "sqlite", "quicksilver")
 }
@@ -112,6 +122,89 @@ func TestWorkerCompletesAQueuedCardJob(t *testing.T) {
 	}
 }
 
+func TestGeneratorSkipsAStaleJobForAnOlderFinalVersion(t *testing.T) {
+	st, recordID, _, clientID := openCardStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+
+	stale, ok, err := st.ClaimNextJob(ctx, now)
+	if err != nil {
+		t.Fatalf("ClaimNextJob() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextJob() found no job")
+	}
+
+	newer := ingest.Bundle{
+		BundleID:   "6f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3",
+		ExternalID: "ses_generate",
+		ProjectKey: "github.com/SeRGei93/meme",
+		Title:      "Session ses_generate",
+		Final:      true,
+		StartedAt:  now.Add(-time.Hour),
+		UpdatedAt:  now.Add(10 * time.Minute),
+		Messages: []ingest.Message{
+			{ID: "msg_2", Role: ingest.RoleUser, Text: "A newer final question", At: now.Add(10 * time.Minute)},
+		},
+	}
+	if _, err := st.IngestSession(ctx, store.IngestParams{
+		ClientID:       clientID,
+		Source:         "opencode",
+		IdempotencyKey: newer.BundleID,
+		Bundle:         newer,
+		Now:            now.Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("newer IngestSession() error = %v", err)
+	}
+
+	client := &fakeClient{content: generatedCardJSON()}
+	generator := &card.Generator{
+		Store:  st,
+		Client: client,
+		Model:  "test-model",
+		Now:    func() time.Time { return now.Add(11 * time.Minute) },
+	}
+
+	if err := generator.Process(ctx, stale); err != nil {
+		t.Fatalf("Process(stale) error = %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("stale job called the LLM %d times, want 0", len(client.calls))
+	}
+	pending, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if pending.CardStatus != store.CardStatusQueued {
+		t.Fatalf("CardStatus after stale job = %q, want queued for the newer version", pending.CardStatus)
+	}
+
+	if err := st.CompleteJob(ctx, stale.ID, now.Add(11*time.Minute)); err != nil {
+		t.Fatalf("CompleteJob(stale) error = %v", err)
+	}
+	current, ok, err := st.ClaimNextJob(ctx, now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("ClaimNextJob() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextJob() found no newer job")
+	}
+	if err := generator.Process(ctx, current); err != nil {
+		t.Fatalf("Process(newer) error = %v", err)
+	}
+
+	record, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusOK {
+		t.Errorf("CardStatus = %q, want ok for the newer version", record.CardStatus)
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("LLM calls = %d, want exactly one for the newer version", len(client.calls))
+	}
+}
+
 func TestGeneratorSavesAValidLLMCardAndIndexesIt(t *testing.T) {
 	st, recordID, jobID, _ := openCardStore(t)
 	ctx := context.Background()
@@ -124,7 +217,8 @@ func TestGeneratorSavesAValidLLMCardAndIndexesIt(t *testing.T) {
 		Model:  "test-model",
 		Now:    func() time.Time { return now },
 	}
-	if err := generator.Process(ctx, store.Job{ID: jobID, RecordID: &recordID}); err != nil {
+	job := queuedJob(t, st, jobID)
+	if err := generator.Process(ctx, job); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
@@ -172,7 +266,8 @@ func TestGeneratorKeepsTheHeuristicCardWhenTheLLMFails(t *testing.T) {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
 
-	if err := generator.Process(ctx, store.Job{ID: jobID, RecordID: &recordID}); err != nil {
+	job := queuedJob(t, st, jobID)
+	if err := generator.Process(ctx, job); err != nil {
 		t.Fatalf("Process() error = %v, want a terminal fallback", err)
 	}
 
@@ -206,7 +301,8 @@ func TestGeneratorKeepsTheHeuristicCardWhenTheResponseIsInvalid(t *testing.T) {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
 
-	if err := generator.Process(ctx, store.Job{ID: jobID, RecordID: &recordID}); err != nil {
+	job := queuedJob(t, st, jobID)
+	if err := generator.Process(ctx, job); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
@@ -230,7 +326,8 @@ func TestGeneratorWithoutAClientKeepsTheHeuristicCard(t *testing.T) {
 	ctx := context.Background()
 	generator := &card.Generator{Store: st}
 
-	if err := generator.Process(ctx, store.Job{ID: jobID, RecordID: &recordID}); err != nil {
+	job := queuedJob(t, st, jobID)
+	if err := generator.Process(ctx, job); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 

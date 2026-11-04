@@ -345,6 +345,32 @@ func TestFailJobDoesNotFailANewerCardVersion(t *testing.T) {
 	}
 }
 
+func TestFailJobMarksTheCurrentCardVersionFailed(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	recordID := ingestSession(t, st, clientID, "card-fail-current", "ses_card_fail_current", now, true)
+
+	job, ok, err := st.ClaimNextJob(ctx, now)
+	if err != nil {
+		t.Fatalf("ClaimNextJob() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextJob() found no job")
+	}
+	if err := st.FailJob(ctx, job.ID, now.Add(time.Minute), "llm is down"); err != nil {
+		t.Fatalf("FailJob() error = %v", err)
+	}
+
+	record, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != CardStatusFailed {
+		t.Errorf("CardStatus = %q, want failed for the current version", record.CardStatus)
+	}
+}
+
 func TestFailCardKeepsTheHeuristicCard(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()
