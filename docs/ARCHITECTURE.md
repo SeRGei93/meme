@@ -14,7 +14,7 @@ Second Brain — это центральная база знаний, котор
 
 - **Сервер на Go** владеет SQLite, полнотекстовым поиском FTS5, генерацией карточек, очередью и MCP.
 - **Локальное приложение на SwiftUI** — единственный исполняемый файл на macOS. Оно показывает UI, следит за локальной папкой `spool/` и отправляет данные на сервер.
-- **Плагин OpenCode** — тонкий TypeScript-адаптер. Он не является отдельным процессом и не ходит в сеть: только собирает нормализованные сессии и складывает JSON-бандлы в `spool/`.
+- **Плагин OpenCode** — тонкий TypeScript-адаптер. Он не является отдельным процессом и не отправляет бандлы: только собирает нормализованные сессии и складывает JSON-бандлы в `spool/`. В сеть плагин ходит лишь по явной команде `/remember` (`POST /api/v1/memories`).
 - **Jarvis** живёт на сервере и пишет в память через MCP `remember` или HTTP `/api/v1/memories`.
 - **Поиск и карточки** выполняются только на сервере.
 - **Бэкапы** — полные снимки SQLite каждые 6 часов в S3-бакет `meme`, хранится 20 последних. Без UI, без API, восстановление только через CLI на сервере.
@@ -481,6 +481,8 @@ plugin/second-brain/
   config.ts       # чтение ~/.config/second-brain/config.json
   project.ts      # project_key из git remote / projectID / host
   events.ts       # idle debounce, compaction, failure
+  backfill.ts     # импорт существующей истории по session.list
+  remember.ts     # команда /remember → POST /api/v1/memories
   types.ts        # spool-бандл и структурные типы OpenCode
   test/           # node --test, TypeScript без сборки
 ```

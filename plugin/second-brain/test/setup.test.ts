@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { defaultConfig } from '../config.ts';
-import { setupPlugin, type SetupContext } from '../setup.ts';
+import { setupPlugin, type RememberCommandEditor, type SetupContext } from '../setup.ts';
 import type { EventLike } from '../events.ts';
 import type { SessionMessageLike } from '../types.ts';
 
@@ -44,6 +44,8 @@ function fakeContext() {
   const store = new Map<string, unknown>();
   const listeners = new Set<(event: EventLike) => void>();
   let compaction: ((event: { sessionID: string }) => Promise<void>) | undefined;
+  const commands: Array<Parameters<RememberCommandEditor['add']>[0]> = [];
+  const syntheticMessages: string[] = [];
 
   const ctx: SetupContext = {
     app: { version: '2.2.5' },
@@ -59,6 +61,9 @@ function fakeContext() {
           },
         };
       },
+      synthetic: async ({ text }) => {
+        syntheticMessages.push(text);
+      },
     },
     storage: {
       get: async (key) => store.get(key),
@@ -68,6 +73,12 @@ function fakeContext() {
     },
     vcs: {
       get: async () => ({ data: { branch: { current: 'main' } } }),
+    },
+    command: {
+      transform: async (callback) => {
+        callback({ add: (definition) => commands.push(definition) });
+        return { dispose: async () => {} };
+      },
     },
     event: {
       subscribe({ signal }) {
@@ -98,6 +109,8 @@ function fakeContext() {
 
   return {
     ctx,
+    commands,
+    syntheticMessages,
     emit(event: EventLike) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -208,6 +221,47 @@ test('backfill can be disabled for a launch', async () => {
   try {
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal((await readdir(spoolDir)).length, 0);
+  } finally {
+    await cleanup();
+    await rm(spoolDir, { recursive: true, force: true });
+  }
+});
+
+test('the /remember command posts a memory and reports it in the session', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext();
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const base = options(spoolDir);
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...base,
+    config: { ...base.config, serverURL: 'https://brain.example.test' },
+    backfill: { enabled: false },
+    remember: {
+      readFile: async () => 'sb_opencode_token',
+      fetch: async (input, init) => {
+        requests.push({ url: String(input), init });
+        return new Response(
+          JSON.stringify({ record_id: 5, job_id: null, status: 'indexed', replayed: false }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    },
+  });
+  try {
+    const command = fake.commands.find((candidate) => candidate.name === 'remember');
+    assert.ok(command, 'remember command is registered');
+
+    await command.execute({ sessionID: 'ses_1', prompt: { text: 'backup bucket is meme' } });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.url, 'https://brain.example.test/api/v1/memories');
+    const headers = new Headers(requests[0]?.init?.headers);
+    assert.equal(headers.get('Authorization'), 'Bearer sb_opencode_token');
+    const body = JSON.parse(String(requests[0]?.init?.body));
+    assert.equal(body.raw_text, 'backup bucket is meme');
+    assert.equal(body.project_key, 'opencode:prj_1');
+    assert.equal(fake.syntheticMessages.length, 1);
+    assert.match(fake.syntheticMessages[0] ?? '', /#5/);
   } finally {
     await cleanup();
     await rm(spoolDir, { recursive: true, force: true });

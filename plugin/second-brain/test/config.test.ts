@@ -38,6 +38,21 @@ test('partial config overrides spool_dir and idle_debounce_ms', async () => {
   });
 });
 
+test('server_url is read for the /remember command', async () => {
+  await withConfigFile(JSON.stringify({ server_url: ' https://brain.example.test ' }), async ({ home, env }) => {
+    const config = await loadConfig({ home, env });
+    assert.equal(config.serverURL, 'https://brain.example.test');
+  });
+});
+
+test('an empty or non-string server_url is ignored', async () => {
+  for (const value of ['', '   ', 42]) {
+    await withConfigFile(JSON.stringify({ server_url: value }), async ({ home, env }) => {
+      assert.equal((await loadConfig({ home, env })).serverURL, undefined);
+    });
+  }
+});
+
 test('malformed or non-object config falls back to defaults instead of throwing', async () => {
   for (const contents of ['{not json', '[]', '"string"', 'null']) {
     await withConfigFile(contents, async ({ home, env }) => {

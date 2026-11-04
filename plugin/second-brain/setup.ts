@@ -1,5 +1,6 @@
 import { hostname as osHostname } from 'node:os';
 import { runBackfill } from './backfill.ts';
+import { runRememberCommand, type FetchLike } from './remember.ts';
 import { createCapture, type WriteBundle } from './capture.ts';
 import { loadConfig, type PluginConfig } from './config.ts';
 import type { StorageLike } from './cursor.ts';
@@ -20,6 +21,12 @@ export interface SetupSession {
     data: readonly SessionInfoLike[];
     cursor?: { next?: string | null };
   }>;
+  /** Injects a visible message into the session; used by /remember. */
+  synthetic?(input: {
+    sessionID: string;
+    text: string;
+    description?: string | null;
+  }): Promise<unknown>;
   hook(
     name: 'compaction',
     callback: (event: { sessionID: string }) => Promise<void>,
@@ -37,6 +44,22 @@ export interface SetupContext {
   readonly event: {
     subscribe(options: { types: readonly string[]; signal: AbortSignal }): AsyncIterable<EventLike>;
   };
+  readonly command?: {
+    transform(callback: (editor: RememberCommandEditor) => void): Promise<{ dispose(): Promise<void> }>;
+  };
+}
+
+export interface RememberInvocation {
+  readonly sessionID: string;
+  readonly prompt: { readonly text: string };
+}
+
+export interface RememberCommandEditor {
+  add(definition: {
+    readonly name: string;
+    readonly description?: string;
+    readonly execute: (invocation: RememberInvocation) => Promise<void>;
+  }): void;
 }
 
 export interface SetupOptions {
@@ -51,6 +74,11 @@ export interface SetupOptions {
     readonly enabled?: boolean;
     readonly pageSize?: number;
     readonly throttleMs?: number;
+  };
+  readonly remember?: {
+    readonly fetch?: FetchLike;
+    readonly readFile?: (path: string) => Promise<string>;
+    readonly timeoutMs?: number;
   };
 }
 
@@ -124,6 +152,25 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
           (error: unknown) => onError(error),
         );
 
+  const synthetic = ctx.session.synthetic?.bind(ctx.session);
+  const commandRegistration = ctx.command
+    ? await ctx.command.transform((editor) => {
+        editor.add({
+          name: 'remember',
+          description: 'Сохранить факт или заметку в Second Brain',
+          execute: (invocation) =>
+            runRememberCommand(invocation, {
+              config,
+              projectKey: `opencode:${ctx.location.project.id}`,
+              readFile: options.remember?.readFile,
+              fetch: options.remember?.fetch,
+              timeoutMs: options.remember?.timeoutMs,
+              say: synthetic ? (input) => synthetic(input) : undefined,
+            }),
+        });
+      })
+    : undefined;
+
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({
@@ -140,12 +187,16 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
   return async () => {
     controller.abort();
     try {
-      await compactionHook.dispose();
+      await commandRegistration?.dispose();
     } finally {
       try {
-        await router.dispose();
+        await compactionHook.dispose();
       } finally {
-        await backfillTask;
+        try {
+          await router.dispose();
+        } finally {
+          await backfillTask;
+        }
       }
     }
   };

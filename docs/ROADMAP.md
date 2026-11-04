@@ -268,9 +268,9 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 - [x] Cursor/outbox:
   - [x] `ctx.storage` для last message/hash;
   - [x] при ошибке записи не двигать курсор.
-- [ ] Optional `/remember` command:
-  - [ ] `ctx.command.transform`;
-  - [ ] отправка текста в `/api/v1/memories`.
+- [x] Optional `/remember` command:
+  - [x] `ctx.command.transform`;
+  - [x] отправка текста в `/api/v1/memories`.
 - [x] Документация установки:
   - [x] путь плагина;
   - [x] запись в `~/.config/opencode/opencode.json(c)`;

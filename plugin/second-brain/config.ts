@@ -12,6 +12,8 @@ export const DEFAULT_IDLE_DEBOUNCE_MS = 4 * 60_000;
 export interface PluginConfig {
   /** Directory that holds config.json and the default spool. */
   readonly configDir: string;
+  /** Server base URL written by SecondBrain.app onboarding. */
+  readonly serverURL?: string;
   /** Where normalized bundles are written. */
   readonly spoolDir: string;
   /** How long session.idle waits before capturing a live bundle. */
@@ -74,6 +76,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Plugi
 
   return {
     ...defaults,
+    serverURL: readServerURL(data),
     spoolDir: readSpoolDir(data, home, defaults),
     idleDebounceMs: readDebounce(data.idle_debounce_ms, defaults.idleDebounceMs),
     maxMessageChars: readBoundedInt(data.max_message_chars, defaults.maxMessageChars, 200_000),
@@ -81,6 +84,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Plugi
     maxToolCallsPerMessage: readBoundedInt(data.max_tool_calls_per_message, defaults.maxToolCallsPerMessage, 500),
     maxToolFieldChars: readBoundedInt(data.max_tool_field_chars, defaults.maxToolFieldChars, 2_000),
   };
+}
+
+function readServerURL(data: Record<string, unknown>): string | undefined {
+  const value = data.server_url;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 function readSpoolDir(data: Record<string, unknown>, home: string, defaults: PluginConfig): string {
