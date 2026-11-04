@@ -76,6 +76,10 @@ struct ConfigStore {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: String = NSHomeDirectory()
     ) -> URL {
+        if let override = environment["SECOND_BRAIN_CONFIG_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
         let base: URL
         if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
             base = URL(fileURLWithPath: xdg, isDirectory: true)

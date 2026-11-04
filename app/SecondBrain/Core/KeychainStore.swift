@@ -6,9 +6,16 @@ enum KeychainError: Error, Equatable {
     case invalidData
 }
 
-/// Stores bearer tokens in the macOS Keychain. Accounts are stable names such as
-/// `admin`, `ui` or `mcp`; the service defaults to the app bundle identifier.
+/// Stores bearer tokens in the macOS Keychain. Accounts are stable names; the
+/// service defaults to the app bundle identifier.
 struct KeychainStore: Sendable {
+    /// Token roles shared by onboarding, the upload queue and Settings.
+    enum Account {
+        static let opencode = "opencode"
+        static let jarvis = "jarvis"
+        static let ui = "ui"
+    }
+
     static let defaultService = "com.serg.secondbrain"
 
     let service: String

@@ -247,6 +247,86 @@ final class APIClientTests: XCTestCase {
         }
     }
 
+    func testCreateClientPostsContractBodyAndReturnsToken() async throws {
+        StubURLProtocol.setHandler { request in
+            .init(status: 201, body: Data("""
+            {"client":{"id":12,"name":"opencode-mac","kind":"opencode",
+              "scopes":["ingest","mcp:read","mcp:write"],"source":"opencode",
+              "created_at":"2026-11-04T19:30:10Z"},
+             "token":"sb_opencode_secret"}
+            """.utf8))
+        }
+
+        let request = CreateClientRequest(
+            name: "opencode-mac",
+            kind: .opencode,
+            scopes: [.ingest, .mcpRead, .mcpWrite]
+        )
+        let response = try await client.createClient(request)
+
+        XCTAssertEqual(response.token, "sb_opencode_secret")
+        XCTAssertEqual(response.client.id, 12)
+        XCTAssertEqual(response.client.scopes, ["ingest", "mcp:read", "mcp:write"])
+        XCTAssertEqual(response.client.source, "opencode")
+
+        let sent = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.url?.path, "/api/v1/clients")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer sb_ui_test")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Content-Type"), "application/json")
+
+        let body = try XCTUnwrap(sent.bodyData)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["name"] as? String, "opencode-mac")
+        XCTAssertEqual(object["kind"] as? String, "opencode")
+        XCTAssertEqual(object["scopes"] as? [String], ["ingest", "mcp:read", "mcp:write"])
+        XCTAssertNil(object["source"])
+    }
+
+    func testListClientsDecodesRevokedClients() async throws {
+        let body = Data("""
+        {"items":[
+          {"id":1,"name":"jarvis","kind":"jarvis","scopes":["ingest"],"source":"jarvis",
+           "created_at":"2026-11-01T10:00:00Z","last_seen_at":null,"revoked_at":null},
+          {"id":2,"name":"old","kind":"ui","scopes":["ui"],"source":null,
+           "created_at":"2026-11-01T10:00:00Z","revoked_at":"2026-11-02T10:00:00Z"}
+        ]}
+        """.utf8)
+        StubURLProtocol.setHandler { _ in .init(body: body) }
+
+        let list = try await client.listClients()
+
+        XCTAssertEqual(list.items.count, 2)
+        XCTAssertNil(list.items[0].revokedAt)
+        XCTAssertNotNil(list.items[1].revokedAt)
+        XCTAssertNil(list.items[1].source)
+    }
+
+    func testRevokeClientSendsDeleteAndAccepts204() async throws {
+        StubURLProtocol.setHandler { _ in .init(status: 204, body: Data()) }
+
+        try await client.revokeClient(id: 12)
+
+        let sent = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.httpMethod, "DELETE")
+        XCTAssertEqual(sent.url?.path, "/api/v1/clients/12")
+    }
+
+    func testCreateClientConflictIsReported() async {
+        let body = Data(#"{"error":{"code":"conflict","message":"name already exists"}}"#.utf8)
+        StubURLProtocol.setHandler { _ in .init(status: 409, body: body) }
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.createClient(.init(name: "jarvis", kind: .jarvis, scopes: [.ingest]))
+        ) { error in
+            guard case APIError.server(let status, let code, _, _) = error else {
+                return XCTFail("expected .server, got \(error)")
+            }
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(code, "conflict")
+        }
+    }
+
     private static let healthJSON = """
     {
       "status": "ok",

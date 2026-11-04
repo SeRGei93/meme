@@ -61,6 +61,24 @@ menu bar или кнопку Quit.
 `AppState.checkHealth(using:)` не требует токена; `loadStats(using:)` проверяет,
 что сохранённый токен ещё работает.
 
+## Onboarding
+
+При первом запуске без `config.json` приложение показывает форму: URL сервера и
+bootstrap admin token (`BRAIN_ADMIN_TOKEN`). По кнопке Connect оно:
+
+1. проверяет `GET /health` (degraded `503` отклоняется);
+2. отзывает активных клиентов с теми же именами и создаёт заново:
+   - `opencode-<host>` — `ingest`, `mcp:read`, `mcp:write`;
+   - `jarvis` — `ingest`, `mcp:read`, `mcp:write`;
+   - `second-brain-app` — `ui`, `admin`;
+3. проверяет выданный `ui`-токен через `GET /api/v1/stats`;
+4. сохраняет токены в Keychain, пишет `config.json` (merge с настройками
+   плагина) и `mcp_token` (`0600`).
+
+Admin token не сохраняется. Повторный запуск сразу подключается; Settings →
+Connection → «Повернуть токены…» открывает форму снова и ротирует все три клиента.
+`AppState.connect` ничего не пишет локально, пока сервер не подтвердил токены.
+
 ## Подпись и sandbox
 
 - Bundle id: `com.serg.secondbrain`.

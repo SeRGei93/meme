@@ -200,6 +200,61 @@ struct Stats: Codable, Equatable, Sendable {
     }
 }
 
+
+// MARK: - Clients
+
+enum ClientKind: String, Codable, Equatable, Sendable {
+    case opencode
+    case jarvis
+    case ui
+    case admin
+}
+
+enum Scope: String, Codable, Equatable, Sendable, CaseIterable {
+    case ingest
+    case mcpRead = "mcp:read"
+    case mcpWrite = "mcp:write"
+    case ui
+    case admin
+}
+
+struct ClientInfo: Codable, Equatable, Sendable, Identifiable {
+    let id: Int64
+    let name: String
+    let kind: String
+    let scopes: [String]
+    let source: String?
+    let createdAt: Date
+    let lastSeenAt: Date?
+    let revokedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kind
+        case scopes
+        case source
+        case createdAt = "created_at"
+        case lastSeenAt = "last_seen_at"
+        case revokedAt = "revoked_at"
+    }
+}
+
+struct ClientList: Codable, Equatable, Sendable {
+    let items: [ClientInfo]
+}
+
+struct CreateClientRequest: Codable, Equatable, Sendable {
+    let name: String
+    let kind: ClientKind
+    let scopes: [Scope]
+}
+
+struct CreateClientResponse: Codable, Equatable, Sendable {
+    let client: ClientInfo
+    let token: String
+}
+
 // MARK: - Loose JSON
 
 /// Arbitrary JSON value used for fields such as `metadata` that the server

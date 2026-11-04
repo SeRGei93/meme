@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
@@ -24,6 +26,16 @@ struct SettingsView: View {
                     Text(errorMessage)
                         .font(.caption)
                         .foregroundStyle(.red)
+                }
+            }
+
+            Section("Connection") {
+                LabeledContent("Server", value: appState.serverURL?.absoluteString ?? "Не настроен")
+
+                Button("Повернуть токены…") {
+                    appState.presentOnboardingForRotation()
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
                 }
             }
 

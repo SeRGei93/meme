@@ -6,7 +6,7 @@ final class SecondBrainUITests: XCTestCase {
     }
 
     func testLaunchShowsMainWindow() throws {
-        let app = XCUIApplication()
+        let app = configuredApp()
         app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
@@ -14,7 +14,7 @@ final class SecondBrainUITests: XCTestCase {
     }
 
     func testSettingsOpens() throws {
-        let app = XCUIApplication()
+        let app = configuredApp()
         app.launch()
 
         let settings = app.buttons["Settings…"]
@@ -25,7 +25,7 @@ final class SecondBrainUITests: XCTestCase {
     }
 
     func testClosingTheWindowKeepsTheAppRunning() throws {
-        let app = XCUIApplication()
+        let app = configuredApp()
         app.launch()
 
         let window = app.windows.firstMatch
@@ -36,7 +36,7 @@ final class SecondBrainUITests: XCTestCase {
     }
 
     func testLaunchAtLoginCanBeToggled() throws {
-        let app = XCUIApplication()
+        let app = configuredApp()
         app.launch()
 
         app.buttons["Settings…"].click()
@@ -53,5 +53,23 @@ final class SecondBrainUITests: XCTestCase {
         // Restore the previous state so the test is repeatable.
         toggle.click()
         XCTAssertEqual(String(describing: toggle.value ?? "nil"), initial)
+    }
+
+    func testOnboardingShowsConnectionFormOnCleanInstall() throws {
+        let app = XCUIApplication()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-\(UUID().uuidString)", isDirectory: true)
+        app.launchEnvironment["SECOND_BRAIN_CONFIG_DIR"] = directory.path
+        app.launch()
+
+        XCTAssertTrue(app.textFields["onboarding.serverURL"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.secureTextFields["onboarding.adminToken"].exists)
+        XCTAssertTrue(app.buttons["onboarding.connect"].exists)
+    }
+
+    private func configuredApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
+        return app
     }
 }
