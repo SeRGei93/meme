@@ -105,7 +105,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 - [x] Зафиксировать модель токенов и scope:
   - `ingest`, `mcp:read`, `mcp:write`, `ui`, `admin`.
 - [x] Создать Go module и скелет `server/cmd/brain`.
-- [ ] Создать Xcode project `app/SecondBrain.xcodeproj`:
+- [x] Создать Xcode project `app/SecondBrain.xcodeproj`:
   - macOS App target, SwiftUI;
   - minimum macOS 14.0;
   - bundle id `com.serg.secondbrain` (заменить при необходимости);
@@ -294,23 +294,23 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Xcode project:
-  - [ ] macOS App, SwiftUI lifecycle;
-  - [ ] `SecondBrain` target;
-  - [ ] `SecondBrainTests`;
-  - [ ] `SecondBrainUITests`;
-  - [ ] minimum macOS 14.0;
-  - [ ] Debug/Release;
-  - [ ] `Info.plist`;
-  - [ ] Hardened Runtime;
-  - [ ] App Sandbox off;
-  - [ ] signing/team.
-- [ ] App shell:
-  - [ ] `@main` App;
-  - [ ] `WindowGroup`;
-  - [ ] `MenuBarExtra`;
-  - [ ] закрытие окна не завершает приложение;
-  - [ ] `Settings` scene.
+- [x] Xcode project:
+  - [x] macOS App, SwiftUI lifecycle;
+  - [x] `SecondBrain` target;
+  - [x] `SecondBrainTests`;
+  - [x] `SecondBrainUITests`;
+  - [x] minimum macOS 14.0;
+  - [x] Debug/Release;
+  - [x] `Info.plist`;
+  - [x] Hardened Runtime;
+  - [x] App Sandbox off;
+  - [x] signing/team.
+- [x] App shell:
+  - [x] `@main` App;
+  - [x] `WindowGroup`;
+  - [x] `MenuBarExtra`;
+  - [x] закрытие окна не завершает приложение;
+  - [x] `Settings` scene.
 - [ ] Core:
   - [ ] `APIClient` на `URLSession` + async/await;
   - [ ] `Codable` модели;
@@ -328,8 +328,8 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] установка OpenCode plugin;
   - [ ] правка/подсказка MCP config;
   - [ ] проверка подключения.
-- [ ] Launch at login:
-  - [ ] `SMAppService.mainApp`.
+- [x] Launch at login:
+  - [x] `SMAppService.mainApp`.
 - [ ] Базовые unit-тесты API client и Keychain.
 
 ### Acceptance criteria
