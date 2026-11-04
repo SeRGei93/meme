@@ -69,6 +69,7 @@ func TestParseRejectsMalformedInput(t *testing.T) {
 		{"batch", `[{"jsonrpc":"2.0","id":1,"method":"ping"}]`, mcp.CodeInvalidRequest},
 		{"wrong version", `{"jsonrpc":"1.0","id":1,"method":"ping"}`, mcp.CodeInvalidRequest},
 		{"missing method", `{"jsonrpc":"2.0","id":1}`, mcp.CodeInvalidRequest},
+		{"scalar", `5`, mcp.CodeInvalidRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,18 +217,5 @@ func TestUnknownToolAndMethod(t *testing.T) {
 	_, errObj = server.Handle(context.Background(), mcp.Request{Method: "resources/list"}, mcp.CallContext{})
 	if errObj == nil || errObj.Code != mcp.CodeMethodNotFound {
 		t.Fatalf("unknown method error = %+v, want -32601", errObj)
-	}
-}
-
-func TestNeededScope(t *testing.T) {
-	scope, ok := mcp.NeededScope(mcp.Request{
-		Method: mcp.MethodToolsCall,
-		Params: json.RawMessage(`{"name":"remember","arguments":{}}`),
-	})
-	if !ok || scope != "mcp:write" {
-		t.Errorf("NeededScope(remember) = %q, %v", scope, ok)
-	}
-	if _, ok := mcp.NeededScope(mcp.Request{Method: mcp.MethodToolsList}); ok {
-		t.Error("NeededScope(tools/list) reports a tool scope")
 	}
 }

@@ -25,17 +25,8 @@ func (s *server) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 		s.writeUnauthorized(w, r)
 		return
 	}
-	if principal.Client == nil {
-		writeError(w, r, http.StatusForbidden, "forbidden",
-			"the bootstrap admin token cannot write memories",
-			map[string]any{"required_kind": "opencode or jarvis"})
-		return
-	}
-	source, ok := principal.Client.Source()
+	source, ok := s.knowledgeSource(w, r, principal)
 	if !ok {
-		writeError(w, r, http.StatusForbidden, "forbidden",
-			"client kind cannot produce a knowledge source",
-			map[string]any{"required_kind": "opencode or jarvis"})
 		return
 	}
 

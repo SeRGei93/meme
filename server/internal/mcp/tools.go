@@ -9,8 +9,6 @@ type ToolInfo struct {
 	Annotations  map[string]any `json:"annotations,omitempty"`
 }
 
-func toolInfo(info ToolInfo) ToolInfo { return info }
-
 var readOnly = map[string]any{"readOnlyHint": true, "idempotentHint": true}
 
 var searchInfo = ToolInfo{

@@ -95,11 +95,11 @@ type Tool struct {
 // Tools returns the five contract tools in contract order.
 func Tools() []Tool {
 	return []Tool{
-		{Name: "search", Scope: auth.ScopeMCPRead, backend: Backend.Search, info: toolInfo(searchInfo)},
-		{Name: "get_record", Scope: auth.ScopeMCPRead, backend: Backend.GetRecord, info: toolInfo(getRecordInfo)},
-		{Name: "remember", Scope: auth.ScopeMCPWrite, backend: Backend.Remember, info: toolInfo(rememberInfo)},
-		{Name: "list_projects", Scope: auth.ScopeMCPRead, backend: Backend.ListProjects, info: toolInfo(listProjectsInfo)},
-		{Name: "stats", Scope: auth.ScopeMCPRead, backend: Backend.Stats, info: toolInfo(statsInfo)},
+		{Name: "search", Scope: auth.ScopeMCPRead, backend: Backend.Search, info: searchInfo},
+		{Name: "get_record", Scope: auth.ScopeMCPRead, backend: Backend.GetRecord, info: getRecordInfo},
+		{Name: "remember", Scope: auth.ScopeMCPWrite, backend: Backend.Remember, info: rememberInfo},
+		{Name: "list_projects", Scope: auth.ScopeMCPRead, backend: Backend.ListProjects, info: listProjectsInfo},
+		{Name: "stats", Scope: auth.ScopeMCPRead, backend: Backend.Stats, info: statsInfo},
 	}
 }
 
@@ -134,6 +134,9 @@ func Parse(body []byte) (Request, *Response) {
 	}
 	if trimmed[0] == '[' {
 		return Request{}, errorResponse(CodeInvalidRequest, "invalid request: batch is not supported")
+	}
+	if trimmed[0] != '{' {
+		return Request{}, errorResponse(CodeInvalidRequest, "invalid request: JSON-RPC request must be an object")
 	}
 
 	var req Request
@@ -202,23 +205,6 @@ func (s *Server) Handle(ctx context.Context, req Request, call CallContext) (any
 	default:
 		return nil, &ErrorObject{Code: CodeMethodNotFound, Message: fmt.Sprintf("method not found: %s", req.Method)}
 	}
-}
-
-// NeededScope returns the scope a tools/call request requires, or false when
-// the method does not invoke a tool.
-func NeededScope(req Request) (auth.Scope, bool) {
-	if req.Method != MethodToolsCall {
-		return "", false
-	}
-	name, _, errObject := ParseToolCall(req.Params)
-	if errObject != nil {
-		return "", false
-	}
-	tool, ok := LookupTool(name)
-	if !ok {
-		return "", false
-	}
-	return tool.Scope, true
 }
 
 type toolResult struct {

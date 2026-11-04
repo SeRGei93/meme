@@ -84,6 +84,15 @@ func TestMCPAuthAndScopes(t *testing.T) {
 	if rec := mcpDo(t, env, uiToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}); rec.Code != http.StatusForbidden {
 		t.Errorf("ui token status = %d, want 403", rec.Code)
 	}
+	if rec := mcpDo(t, env, testAdminToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"}); rec.Code != http.StatusForbidden {
+		t.Errorf("bootstrap token status = %d, want 403", rec.Code)
+	}
+
+	revoked := createClient(t, env, "revoked", "jarvis", []string{"mcp:read"})
+	env.do(t, http.MethodDelete, "/api/v1/clients/"+strconv.FormatInt(revoked.Client.ID, 10), testAdminToken, nil)
+	if rec := mcpDo(t, env, revoked.Token, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("revoked token status = %d, want 401", rec.Code)
+	}
 
 	rec := mcpDo(t, env, reader, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 	if rec.Code != http.StatusOK {
@@ -131,14 +140,14 @@ func TestMCPSearchReturnsCardsWithoutRawText(t *testing.T) {
 func TestMCPGetRecordReturnsRawTextAndNotFound(t *testing.T) {
 	env := newTestEnv(t)
 	client := createClient(t, env, "jarvis", "jarvis", []string{"mcp:read"})
-	seedReadMemory(t, env, client.Client.ID, "m1", "proj", nil, time.Now().UTC())
+	recordID := seedReadMemory(t, env, client.Client.ID, "m2", "proj", nil, time.Now().UTC())
 
-	rec := mcpDo(t, env, client.Token, toolCallPayload(3, "get_record", map[string]any{"id": 1}))
+	rec := mcpDo(t, env, client.Token, toolCallPayload(3, "get_record", map[string]any{"id": recordID}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	structured := mcpStructured(t, rec)
-	if structured["raw_text"] != "Raw text for m1" {
+	if structured["raw_text"] != "Raw text for m2" {
 		t.Errorf("raw_text = %v", structured["raw_text"])
 	}
 
@@ -187,6 +196,11 @@ func TestMCPRememberRequiresWriteScopeAndDerivesSource(t *testing.T) {
 		t.Errorf("read-only remember status = %d, want 403", rec.Code)
 	}
 
+	writeOnly := createClient(t, env, "writer", "jarvis", []string{"mcp:write"})
+	if rec := mcpDo(t, env, writeOnly.Token, toolCallPayload(7, "search", map[string]any{"query": "x"})); rec.Code != http.StatusForbidden {
+		t.Errorf("write-only search status = %d, want 403", rec.Code)
+	}
+
 	args := map[string]any{
 		"text":        "Решение: используем SQLite FTS5",
 		"title":       "FTS5",
@@ -230,12 +244,25 @@ func TestMCPRememberRequiresWriteScopeAndDerivesSource(t *testing.T) {
 	// A source argument is rejected: source is derived from the token.
 	badArgs := map[string]any{"text": "x", "source": "opencode"}
 	bad := mcpDo(t, env, writer.Token, toolCallPayload(10, "remember", badArgs))
-	if mcpResult(t, bad)["isError"] != true {
+	badResult := mcpResult(t, bad)
+	if badResult["isError"] != true {
 		t.Error("remember with source did not fail")
+	}
+	badError := badResult["structuredContent"].(map[string]any)["error"].(map[string]any)
+	if badError["code"] != "validation_failed" {
+		t.Errorf("source error code = %v, want validation_failed", badError["code"])
+	}
+
+	// The same external_id with different content is a conflict.
+	conflictArgs := map[string]any{"text": "different", "external_id": "decision-fts5"}
+	conflict := mcpDo(t, env, writer.Token, toolCallPayload(11, "remember", conflictArgs))
+	conflictError := mcpResult(t, conflict)["structuredContent"].(map[string]any)["error"].(map[string]any)
+	if conflictError["code"] != "conflict" {
+		t.Errorf("conflict code = %v, want conflict", conflictError["code"])
 	}
 
 	// The bootstrap admin has every scope but no knowledge source.
-	if rec := mcpDo(t, env, testAdminToken, toolCallPayload(11, "remember", map[string]any{"text": "x"})); rec.Code != http.StatusForbidden {
+	if rec := mcpDo(t, env, testAdminToken, toolCallPayload(12, "remember", map[string]any{"text": "x"})); rec.Code != http.StatusForbidden {
 		t.Errorf("bootstrap remember status = %d, want 403", rec.Code)
 	}
 }
@@ -287,12 +314,21 @@ func TestMCPProtocolAndArgumentErrors(t *testing.T) {
 		{},
 		{"query": "x", "unknown": true},
 		{"query": "x", "limit": 51},
+		{"query": "x", "limit": 0},
+		{"query": "x", "project": ""},
+		{"query": "x", "source": "other"},
 	} {
 		rec := mcpDo(t, env, token, toolCallPayload(3, "search", args))
 		result := mcpResult(t, rec)
 		if result["isError"] != true {
 			t.Errorf("search args %v did not fail: %q", args, rec.Body.String())
 		}
+	}
+
+	tooLarge := make([]byte, (10<<20)+1)
+	oversized := env.doRaw(t, http.MethodPost, "/mcp", token, "application/json", bytes.NewReader(tooLarge))
+	if oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body status = %d, want 413", oversized.Code)
 	}
 
 	notification := mcpDo(t, env, token, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})

@@ -54,6 +54,11 @@ func (s *server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	principal, _ := principalFrom(r.Context())
+	source, ok := s.knowledgeSource(w, r, principal)
+	if !ok {
+		return
+	}
+
 	if request.Method == mcp.MethodToolsCall {
 		toolName, _, callErr := mcp.ParseToolCall(request.Params)
 		if callErr != nil {
@@ -72,26 +77,12 @@ func (s *server) handleMCP(w http.ResponseWriter, r *http.Request) {
 				map[string]any{"required_any_of": auth.ScopeStrings([]auth.Scope{tool.Scope})})
 			return
 		}
-		if tool.Name == "remember" {
-			if principal.Client == nil {
-				writeError(w, r, http.StatusForbidden, "forbidden",
-					"the bootstrap admin token cannot write memories",
-					map[string]any{"required_kind": "opencode or jarvis"})
-				return
-			}
-			if _, ok := principal.Client.Source(); !ok {
-				writeError(w, r, http.StatusForbidden, "forbidden",
-					"client kind cannot produce a knowledge source",
-					map[string]any{"required_kind": "opencode or jarvis"})
-				return
-			}
-		}
 	}
 
-	call := mcp.CallContext{RequestID: requestIDFrom(r.Context())}
-	if principal.Client != nil {
-		call.ClientID = principal.Client.ID
-		call.Source, _ = principal.Client.Source()
+	call := mcp.CallContext{
+		ClientID:  principal.Client.ID,
+		Source:    source,
+		RequestID: requestIDFrom(r.Context()),
 	}
 
 	result, handleErr := s.mcpServer.Handle(r.Context(), request, call)

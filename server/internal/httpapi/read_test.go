@@ -25,13 +25,14 @@ type projectListBody struct {
 	Items []projectBody `json:"items"`
 }
 
-func seedReadMemory(t *testing.T, env *testEnv, clientID int64, externalID, projectKey string, keywords []string, now time.Time) {
+func seedReadMemory(t *testing.T, env *testEnv, clientID int64, externalID, projectKey string, keywords []string, now time.Time) int64 {
 	t.Helper()
 
-	_, err := env.store.SaveMemory(context.Background(), storeMemoryParams(clientID, externalID, projectKey, keywords, now))
+	result, err := env.store.SaveMemory(context.Background(), storeMemoryParams(clientID, externalID, projectKey, keywords, now))
 	if err != nil {
 		t.Fatalf("SaveMemory(%q) error = %v", externalID, err)
 	}
+	return result.RecordID
 }
 
 func storeMemoryParams(clientID int64, externalID, projectKey string, keywords []string, now time.Time) store.MemoryParams {

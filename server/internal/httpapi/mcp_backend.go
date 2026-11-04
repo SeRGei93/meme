@@ -23,10 +23,10 @@ type mcpBackend struct {
 }
 
 type searchArguments struct {
-	Query   string `json:"query"`
-	Limit   int    `json:"limit"`
-	Project string `json:"project"`
-	Source  string `json:"source"`
+	Query   string  `json:"query"`
+	Limit   *int    `json:"limit"`
+	Project *string `json:"project"`
+	Source  *string `json:"source"`
 }
 
 type getRecordArguments struct {
@@ -44,7 +44,7 @@ type rememberArguments struct {
 }
 
 type listProjectsArguments struct {
-	Limit int `json:"limit"`
+	Limit *int `json:"limit"`
 }
 
 func (b mcpBackend) Search(ctx context.Context, _ mcp.CallContext, raw json.RawMessage) (any, *mcp.ToolError) {
@@ -57,44 +57,44 @@ func (b mcpBackend) Search(ctx context.Context, _ mcp.CallContext, raw json.RawM
 	if runeLen(query) < 1 || runeLen(query) > 500 {
 		return nil, validationError("query", "must be 1-500 characters")
 	}
-	if args.Limit == 0 {
-		args.Limit = 8
+	limit := 8
+	if args.Limit != nil {
+		limit = *args.Limit
+		if limit < 1 || limit > 50 {
+			return nil, validationError("limit", "must be between 1 and 50")
+		}
 	}
-	if args.Limit < 1 || args.Limit > 50 {
-		return nil, validationError("limit", "must be between 1 and 50")
+	project := ""
+	if args.Project != nil {
+		project = strings.TrimSpace(*args.Project)
+		if runeLen(project) < 1 || runeLen(project) > 500 {
+			return nil, validationError("project", "must be 1-500 characters")
+		}
 	}
-	if runeLen(args.Project) > 500 {
-		return nil, validationError("project", "must be at most 500 characters")
-	}
-	if args.Source != "" && !auth.ValidSource(args.Source) {
-		return nil, validationError("source", "must be opencode or jarvis")
+	source := ""
+	if args.Source != nil {
+		source = *args.Source
+		if !auth.ValidSource(source) {
+			return nil, validationError("source", "must be opencode or jarvis")
+		}
 	}
 
 	result, err := b.server.store.Search(ctx, store.SearchParams{
 		Query:      query,
-		Limit:      args.Limit,
-		ProjectKey: args.Project,
-		Source:     args.Source,
+		Limit:      limit,
+		ProjectKey: project,
+		Source:     source,
 		Now:        time.Now().UTC(),
 	})
 	switch {
 	case errors.Is(err, store.ErrInvalidSearch):
 		return nil, &mcp.ToolError{Code: "invalid_request", Message: err.Error()}
 	case err != nil:
-		b.server.logger.Error("mcp search", "error", err, "request_id", requestID(ctx))
+		b.server.logger.Error("mcp search", "error", err, "request_id", requestIDFrom(ctx))
 		return nil, internalError()
 	}
 
-	items := make([]searchHitResponse, len(result.Items))
-	for i, hit := range result.Items {
-		items[i] = toSearchHitResponse(hit)
-	}
-	return searchResponse{
-		Items: items,
-		Total: result.Total,
-		Query: query,
-		Limit: args.Limit,
-	}, nil
+	return toSearchResponse(result, query, limit), nil
 }
 
 func (b mcpBackend) GetRecord(ctx context.Context, _ mcp.CallContext, raw json.RawMessage) (any, *mcp.ToolError) {
@@ -111,7 +111,7 @@ func (b mcpBackend) GetRecord(ctx context.Context, _ mcp.CallContext, raw json.R
 	case errors.Is(err, store.ErrNotFound):
 		return nil, &mcp.ToolError{Code: "not_found", Message: fmt.Sprintf("Record %d not found.", args.ID)}
 	case err != nil:
-		b.server.logger.Error("mcp get record", "error", err, "record_id", args.ID, "request_id", requestID(ctx))
+		b.server.logger.Error("mcp get record", "error", err, "record_id", args.ID, "request_id", requestIDFrom(ctx))
 		return nil, internalError()
 	}
 	return toRecordResponse(record), nil
@@ -141,7 +141,7 @@ func (b mcpBackend) Remember(ctx context.Context, call mcp.CallContext, raw json
 	case errors.Is(err, store.ErrIdempotencyKeyReused):
 		return nil, &mcp.ToolError{Code: "conflict", Message: "external_id was already used with a different request"}
 	case err != nil:
-		b.server.logger.Error("mcp remember", "error", err, "client_id", call.ClientID, "request_id", requestID(ctx))
+		b.server.logger.Error("mcp remember", "error", err, "client_id", call.ClientID, "request_id", requestIDFrom(ctx))
 		return nil, internalError()
 	}
 
@@ -210,34 +210,23 @@ func (b mcpBackend) ListProjects(ctx context.Context, _ mcp.CallContext, raw jso
 	if toolErr := decodeToolArguments(raw, &args); toolErr != nil {
 		return nil, toolErr
 	}
-	if args.Limit == 0 {
-		args.Limit = store.DefaultProjectLimit
-	}
-	if args.Limit < 1 || args.Limit > store.MaxProjectLimit {
-		return nil, validationError("limit", fmt.Sprintf("must be between 1 and %d", store.MaxProjectLimit))
+	limit := store.DefaultProjectLimit
+	if args.Limit != nil {
+		limit = *args.Limit
+		if limit < 1 || limit > store.MaxProjectLimit {
+			return nil, validationError("limit", fmt.Sprintf("must be between 1 and %d", store.MaxProjectLimit))
+		}
 	}
 
-	projects, err := b.server.store.ListProjects(ctx, store.ListProjectsParams{Limit: args.Limit})
+	projects, err := b.server.store.ListProjects(ctx, store.ListProjectsParams{Limit: limit})
 	if errors.Is(err, store.ErrInvalidProjectQuery) {
 		return nil, &mcp.ToolError{Code: "invalid_request", Message: err.Error()}
 	}
 	if err != nil {
-		b.server.logger.Error("mcp list projects", "error", err, "request_id", requestID(ctx))
+		b.server.logger.Error("mcp list projects", "error", err, "request_id", requestIDFrom(ctx))
 		return nil, internalError()
 	}
-
-	items := make([]projectResponse, len(projects))
-	for i, project := range projects {
-		items[i] = projectResponse{
-			Key:            project.Key,
-			Name:           project.Name,
-			Path:           project.Path,
-			RecordCount:    project.RecordCount,
-			LastActivityAt: project.LastActivityAt,
-			CreatedAt:      project.CreatedAt,
-		}
-	}
-	return projectListResponse{Items: items}, nil
+	return toProjectListResponse(projects), nil
 }
 
 func (b mcpBackend) Stats(ctx context.Context, _ mcp.CallContext, raw json.RawMessage) (any, *mcp.ToolError) {
@@ -248,7 +237,7 @@ func (b mcpBackend) Stats(ctx context.Context, _ mcp.CallContext, raw json.RawMe
 
 	stats, err := b.server.store.Stats(ctx)
 	if err != nil {
-		b.server.logger.Error("mcp stats", "error", err, "request_id", requestID(ctx))
+		b.server.logger.Error("mcp stats", "error", err, "request_id", requestIDFrom(ctx))
 		return nil, internalError()
 	}
 	return toStatsResponse(stats), nil
@@ -264,8 +253,4 @@ func internalError() *mcp.ToolError {
 
 func runeLen(value string) int {
 	return utf8.RuneCountInString(value)
-}
-
-func requestID(ctx context.Context) string {
-	return requestIDFrom(ctx)
 }

@@ -64,17 +64,22 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, toSearchResponse(result, params.Query, params.Limit))
+}
+
+// toSearchResponse is shared by REST and MCP so both surfaces serialize the
+// same fields.
+func toSearchResponse(result store.SearchResult, query string, limit int) searchResponse {
 	items := make([]searchHitResponse, len(result.Items))
 	for i, hit := range result.Items {
 		items[i] = toSearchHitResponse(hit)
 	}
-
-	writeJSON(w, http.StatusOK, searchResponse{
+	return searchResponse{
 		Items: items,
 		Total: result.Total,
-		Query: params.Query,
-		Limit: params.Limit,
-	})
+		Query: query,
+		Limit: limit,
+	}
 }
 
 func parseSearchParams(w http.ResponseWriter, r *http.Request) (store.SearchParams, bool) {
