@@ -841,7 +841,7 @@ CREATE TABLE idempotency_keys (
     request_hash  TEXT NOT NULL,
     record_id     INTEGER NOT NULL REFERENCES records(id),
     job_id        INTEGER REFERENCES ingest_jobs(id),
-    status        TEXT NOT NULL CHECK (status IN ('queued', 'stored')),
+    status        TEXT NOT NULL CHECK (status IN ('queued', 'stored', 'indexed')),
     created_at    TEXT NOT NULL,
     PRIMARY KEY (client_id, operation, key)
 );

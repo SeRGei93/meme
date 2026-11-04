@@ -47,16 +47,13 @@ type MemoryResult struct {
 }
 
 // preparedMemory derives everything the store needs from the request once, so
-// the content hash, external id and stored card cannot drift apart.
+// the content hash, external id and stored title cannot drift apart.
 type preparedMemory struct {
 	MemoryParams
 	requestHash string
 	contentHash string
 	externalID  string
-	projectKey  string
 	title       string
-	summary     string
-	hasCard     bool
 }
 
 func prepareMemory(params MemoryParams) preparedMemory {
@@ -86,10 +83,7 @@ func prepareMemory(params MemoryParams) preparedMemory {
 		requestHash:  requestHash,
 		contentHash:  request.ContentHash(),
 		externalID:   externalID,
-		projectKey:   request.EffectiveProjectKey(),
 		title:        title,
-		summary:      request.Summary,
-		hasCard:      request.HasCard(),
 	}
 }
 
@@ -180,23 +174,26 @@ func replayMemory(ctx context.Context, tx *sql.Tx, recordID int64) (MemoryResult
 }
 
 func insertMemoryRow(ctx context.Context, tx *sql.Tx, params preparedMemory) (MemoryResult, error) {
-	projectID, err := upsertProject(ctx, tx, params.projectKey, "", params.Now)
+	request := params.Request
+	hasCard := request.HasCard()
+
+	projectID, err := upsertProject(ctx, tx, request.EffectiveProjectKey(), "", params.Now)
 	if err != nil {
 		return MemoryResult{}, err
 	}
 
-	metadata, err := marshalJSONMap(params.Request.Metadata)
+	metadata, err := marshalJSONMap(request.Metadata)
 	if err != nil {
 		return MemoryResult{}, err
 	}
 
 	cardStatus := CardStatusOK
-	if !params.hasCard {
+	if !hasCard {
 		cardStatus = CardStatusQueued
 	}
 
 	startedAt := params.Now
-	if occurredAt := params.Request.OccurredAt; occurredAt != nil {
+	if occurredAt := request.OccurredAt; occurredAt != nil {
 		startedAt = occurredAt.UTC()
 	}
 
@@ -208,9 +205,9 @@ func insertMemoryRow(ctx context.Context, tx *sql.Tx, params preparedMemory) (Me
 			card_model, card_status, metadata_json
 		) VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, NULL, ?, ?)`,
 		params.ClientID, params.Source, params.externalID, projectID,
-		params.title, params.summary,
-		joinList(params.Request.Questions), joinList(params.Request.Keywords), joinList(params.Request.Atoms),
-		params.Request.RawText, params.contentHash,
+		params.title, request.Summary,
+		joinList(request.Questions), joinList(request.Keywords), joinList(request.Atoms),
+		request.RawText, params.contentHash,
 		formatTime(params.Now), formatTime(startedAt), formatTime(params.Now), formatTime(params.Now),
 		cardStatus, metadata,
 	)
@@ -225,7 +222,7 @@ func insertMemoryRow(ctx context.Context, tx *sql.Tx, params preparedMemory) (Me
 
 	status := MemoryStatusIndexed
 	var jobID *int64
-	if !params.hasCard {
+	if !hasCard {
 		id, err := insertCardJob(ctx, tx, params.ClientID, params.IdempotencyKey, params.Source, params.externalID, recordID, params.Now, "memory")
 		if err != nil {
 			return MemoryResult{}, fmt.Errorf("enqueue memory job: %w", err)

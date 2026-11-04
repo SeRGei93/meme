@@ -295,6 +295,38 @@ func TestSaveMemoryMasksSecretsBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestFailedMemoryJobMarksTheCardFailed(t *testing.T) {
+	st, clientID := openMemoryStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+
+	result := saveMemory(t, st, clientID, "memory-fail", memory.Request{
+		RawText: "A memory whose card generation keeps failing.",
+	}, now)
+	if result.JobID == nil {
+		t.Fatal("JobID = nil, want a card-generation job")
+	}
+
+	job, ok, err := st.ClaimNextJob(ctx, now)
+	if err != nil {
+		t.Fatalf("ClaimNextJob() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNextJob() found no job")
+	}
+	if err := st.FailJob(ctx, job.ID, now.Add(time.Minute), "llm is down"); err != nil {
+		t.Fatalf("FailJob() error = %v", err)
+	}
+
+	record, err := st.GetRecord(ctx, result.RecordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusFailed {
+		t.Errorf("CardStatus = %q, want failed", record.CardStatus)
+	}
+}
+
 func TestSaveMemoryFallsBackToTheExternalIDWhenTheFirstLineIsBlank(t *testing.T) {
 	st, clientID := openMemoryStore(t)
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)

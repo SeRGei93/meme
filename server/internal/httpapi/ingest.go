@@ -65,7 +65,7 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idempotencyKey, ok := ingestIdempotencyKey(r, bundle.BundleID)
+	idempotencyKey, ok := idempotencyKey(r, bundle.BundleID)
 	if !ok {
 		writeError(w, r, http.StatusBadRequest, "invalid_request",
 			"Idempotency-Key must be 1-128 printable ASCII characters",
@@ -116,10 +116,12 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func ingestIdempotencyKey(r *http.Request, bundleID string) (string, bool) {
+// idempotencyKey returns the Idempotency-Key header when present and the
+// endpoint's content-derived fallback otherwise.
+func idempotencyKey(r *http.Request, fallback string) (string, bool) {
 	values := r.Header.Values("Idempotency-Key")
 	if len(values) == 0 {
-		return bundleID, validIdempotencyKey(bundleID)
+		return fallback, validIdempotencyKey(fallback)
 	}
 	if len(values) > 1 {
 		return "", false

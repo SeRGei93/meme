@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -84,7 +85,7 @@ func Decode(r io.Reader) (Request, error) {
 
 	var request Request
 	if err := decoder.Decode(&request); err != nil {
-		return Request{}, err
+		return Request{}, decodeError(err)
 	}
 
 	request.present = presence{
@@ -93,6 +94,16 @@ func Decode(r io.Reader) (Request, error) {
 		title:      hasField(fields, "title"),
 	}
 	return request, nil
+}
+
+// decodeError turns a timestamp parse failure into a schema violation: the JSON
+// is well-formed, so the contract calls for 422 validation_failed, not 400.
+func decodeError(err error) error {
+	var parseError *time.ParseError
+	if errors.As(err, &parseError) {
+		return fieldError("occurred_at", "must be an RFC 3339 date-time")
+	}
+	return err
 }
 
 func hasField(fields map[string]json.RawMessage, name string) bool {

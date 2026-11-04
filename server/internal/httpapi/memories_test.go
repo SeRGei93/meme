@@ -356,6 +356,13 @@ func TestCreateMemoryValidatesTheRequest(t *testing.T) {
 			code:   "validation_failed",
 			field:  "title",
 		},
+		{
+			name:   "invalid occurred_at",
+			body:   map[string]any{"raw_text": "x", "occurred_at": "not-a-date"},
+			status: http.StatusUnprocessableEntity,
+			code:   "validation_failed",
+			field:  "occurred_at",
+		},
 	}
 
 	for _, tt := range tests {
@@ -401,6 +408,21 @@ func TestCreateMemoryRejectsMalformedRequests(t *testing.T) {
 				t.Errorf("code = %q, want %q", envelope.Error.Code, tt.code)
 			}
 		})
+	}
+}
+
+func TestCreateMemoryRejectsOversizedBody(t *testing.T) {
+	env, jarvisToken, _, _ := newMemoryEnv(t)
+
+	rec := doMemory(t, env, jarvisToken, map[string]any{
+		"raw_text": "x",
+		"title":    strings.Repeat("a", 10<<20),
+	}, "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body %s)", rec.Code, rec.Body.String())
+	}
+	if code := decodeError(t, rec).Error.Code; code != "payload_too_large" {
+		t.Errorf("code = %q, want payload_too_large", code)
 	}
 }
 

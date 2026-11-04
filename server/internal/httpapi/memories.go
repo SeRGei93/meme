@@ -49,22 +49,20 @@ func (s *server) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	request, err := memory.Decode(r.Body)
 	if err != nil {
+		if writeMemoryValidationError(w, r, err) {
+			return
+		}
 		writeJSONDecodeError(w, r, err)
 		return
 	}
 	if err := request.Validate(); err != nil {
-		var validationError *memory.ValidationError
-		if errors.As(err, &validationError) {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_failed",
-				validationError.Error(),
-				map[string]any{"field": validationError.Field})
-			return
+		if !writeMemoryValidationError(w, r, err) {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", err.Error(), nil)
 		}
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", err.Error(), nil)
 		return
 	}
 
-	idempotencyKey, ok := memoryIdempotencyKey(r, request)
+	idempotencyKey, ok := idempotencyKey(r, request.RequestHash())
 	if !ok {
 		writeError(w, r, http.StatusBadRequest, "invalid_request",
 			"Idempotency-Key must be 1-128 printable ASCII characters",
@@ -120,15 +118,15 @@ func (s *server) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// memoryIdempotencyKey uses the header when present. The contract's fallback is
-// the SHA-256 of the request content, which RequestHash already provides.
-func memoryIdempotencyKey(r *http.Request, request memory.Request) (string, bool) {
-	values := r.Header.Values("Idempotency-Key")
-	if len(values) == 0 {
-		return request.RequestHash(), true
+// writeMemoryValidationError maps a memory schema violation to 422 and reports
+// whether it handled the error.
+func writeMemoryValidationError(w http.ResponseWriter, r *http.Request, err error) bool {
+	var validationError *memory.ValidationError
+	if !errors.As(err, &validationError) {
+		return false
 	}
-	if len(values) > 1 {
-		return "", false
-	}
-	return values[0], validIdempotencyKey(values[0])
+	writeError(w, r, http.StatusUnprocessableEntity, "validation_failed",
+		validationError.Error(),
+		map[string]any{"field": validationError.Field})
+	return true
 }

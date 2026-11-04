@@ -1280,7 +1280,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
-          description: Optional caller context stored verbatim as JSON.
+          description: Optional caller context stored as JSON; credentials are masked before persistence.
     MemoryResponse:
       type: object
       additionalProperties: false

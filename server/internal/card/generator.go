@@ -49,9 +49,10 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 		return fmt.Errorf("card generator: load record %d: %w", *job.RecordID, err)
 	}
 	// A queued final ingest shares its created_at with the record's
-	// finalized_at. A mismatch means a newer final version already queued its
-	// own job, so this one must not touch the current card.
-	if record.Kind == "session" && (record.FinalizedAt == nil || !record.FinalizedAt.Equal(job.CreatedAt)) {
+	// finalized_at; memories are stamped the same way. A mismatch means a newer
+	// final version already queued its own job, so this one must not touch the
+	// current card.
+	if record.FinalizedAt == nil || !record.FinalizedAt.Equal(job.CreatedAt) {
 		g.logger().Info("skipping stale card job",
 			"record_id", record.ID,
 			"job_id", job.ID,

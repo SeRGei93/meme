@@ -202,14 +202,15 @@ func (s *Store) finishAttempt(ctx context.Context, id int64, status JobStatus, a
 	if status == JobFailed {
 		// Only fail the card when the job still belongs to the record's current
 		// final version. A leftover job for an older version must not mark the
-		// newer version's queued card as failed.
+		// newer version's queued card as failed. Memories share the same
+		// invariant: finalized_at and the job's created_at are stamped together.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE records
 			SET card_status = ?
 			WHERE card_status = ?
-			  AND id = (SELECT record_id FROM ingest_jobs WHERE id = ? AND kind = 'ingest')
+			  AND id = (SELECT record_id FROM ingest_jobs WHERE id = ? AND kind IN ('ingest', 'memory'))
 			  AND COALESCE(finalized_at, '') = (
-				SELECT created_at FROM ingest_jobs WHERE id = ? AND kind = 'ingest'
+				SELECT created_at FROM ingest_jobs WHERE id = ? AND kind IN ('ingest', 'memory')
 			  )`,
 			CardStatusFailed, CardStatusQueued, id, id,
 		); err != nil {
