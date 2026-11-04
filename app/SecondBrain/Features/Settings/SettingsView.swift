@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
@@ -27,11 +29,18 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Connection") {
+                LabeledContent("Server", value: appState.serverURL?.absoluteString ?? "Не настроен")
+
+                Button("Повернуть токены…") {
+                    appState.presentOnboardingForRotation()
+                    openWindow(id: "main")
+                    NSApp.activate()
+                }
+            }
+
             Section("Status") {
                 LabeledContent("State", value: appState.statusText)
-                if let serverURL = appState.serverURL {
-                    LabeledContent("Server", value: serverURL.absoluteString)
-                }
                 if let health = appState.health {
                     LabeledContent("Version", value: health.version)
                     LabeledContent("Schema", value: String(health.schemaVersion))

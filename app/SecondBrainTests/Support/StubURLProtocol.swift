@@ -70,3 +70,24 @@ final class StubURLProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+extension URLRequest {
+    /// `URLSession` turns `httpBody` into a stream before it reaches a
+    /// `URLProtocol`, so read the stream when the direct body is absent.
+    var bodyData: Data? {
+        if let httpBody { return httpBody }
+        guard let stream = httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+}

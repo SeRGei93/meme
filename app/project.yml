@@ -69,7 +69,7 @@ schemes:
       config: Debug
       targets:
         - name: SecondBrainTests
-          parallelizable: true
+          parallelizable: false
         - name: SecondBrainUITests
           parallelizable: false
     profile:

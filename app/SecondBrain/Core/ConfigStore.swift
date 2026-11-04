@@ -3,6 +3,13 @@ import Foundation
 /// The subset of `~/.config/second-brain/config.json` the app owns. The file is
 /// shared with the OpenCode plugin, so keys stay snake_case and saving merges
 /// into the existing JSON instead of replacing it.
+/// Client created by this installation. Persisted so a later rotation knows
+/// exactly which ids are ours and never revokes another machine's tokens.
+struct StoredClient: Codable, Equatable, Sendable {
+    let id: Int64
+    let name: String
+}
+
 struct AppConfig: Codable, Equatable, Sendable {
     /// `nil` until onboarding has connected to a server. The plugin-only file has
     /// no `server_url` yet and must still load.
@@ -13,6 +20,10 @@ struct AppConfig: Codable, Equatable, Sendable {
     var maxMessages: Int?
     var maxToolCallsPerMessage: Int?
     var maxToolFieldChars: Int?
+    /// Role (`opencode`, `jarvis`, `ui`) → client created by this installation.
+    var appClients: [String: StoredClient]?
+    /// Ids whose revocation failed; retried on the next onboarding run.
+    var pendingRevocations: [Int64]?
 
     init(
         serverURL: URL? = nil,
@@ -21,7 +32,9 @@ struct AppConfig: Codable, Equatable, Sendable {
         maxMessageChars: Int? = nil,
         maxMessages: Int? = nil,
         maxToolCallsPerMessage: Int? = nil,
-        maxToolFieldChars: Int? = nil
+        maxToolFieldChars: Int? = nil,
+        appClients: [String: StoredClient]? = nil,
+        pendingRevocations: [Int64]? = nil
     ) {
         self.serverURL = serverURL
         self.spoolDir = spoolDir
@@ -30,6 +43,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         self.maxMessages = maxMessages
         self.maxToolCallsPerMessage = maxToolCallsPerMessage
         self.maxToolFieldChars = maxToolFieldChars
+        self.appClients = appClients
+        self.pendingRevocations = pendingRevocations
     }
 
     enum CodingKeys: String, CodingKey {
@@ -40,6 +55,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         case maxMessages = "max_messages"
         case maxToolCallsPerMessage = "max_tool_calls_per_message"
         case maxToolFieldChars = "max_tool_field_chars"
+        case appClients = "app_clients"
+        case pendingRevocations = "pending_revocations"
     }
 }
 
@@ -76,6 +93,10 @@ struct ConfigStore {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: String = NSHomeDirectory()
     ) -> URL {
+        if let override = environment["SECOND_BRAIN_CONFIG_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
         let base: URL
         if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
             base = URL(fileURLWithPath: xdg, isDirectory: true)
@@ -98,6 +119,12 @@ struct ConfigStore {
         }
     }
 
+    /// Keys owned exclusively by the app. A `nil` value removes the key, so a
+    /// rollback can restore a config that predates onboarding.
+    private static let appOwnedKeys: Set<String> = [
+        "server_url", "app_clients", "pending_revocations",
+    ]
+
     /// Writes the app-owned keys, preserving every other key already present in
     /// the shared file (plugin settings, fields added by newer versions).
     func save(_ config: AppConfig) throws {
@@ -105,6 +132,9 @@ struct ConfigStore {
             try ensureDirectory()
             let encoded = try JSONEncoder().encode(config)
             var object = existingObject() ?? [:]
+            for key in Self.appOwnedKeys {
+                object.removeValue(forKey: key)
+            }
             if let patch = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] {
                 object.merge(patch) { _, new in new }
             }
@@ -115,6 +145,15 @@ struct ConfigStore {
             try writeAtomically(data)
         } catch let error as ConfigStoreError {
             throw error
+        } catch {
+            throw ConfigStoreError.writeFailed
+        }
+    }
+
+    func delete() throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        do {
+            try fileManager.removeItem(at: fileURL)
         } catch {
             throw ConfigStoreError.writeFailed
         }

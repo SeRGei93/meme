@@ -61,6 +61,29 @@ menu bar или кнопку Quit.
 `AppState.checkHealth(using:)` не требует токена; `loadStats(using:)` проверяет,
 что сохранённый токен ещё работает.
 
+## Onboarding
+
+При первом запуске без `config.json` приложение показывает форму: URL сервера и
+bootstrap admin token (`BRAIN_ADMIN_TOKEN`). По кнопке Connect оно:
+
+1. проверяет `GET /health` (degraded `503` отклоняется);
+2. создаёт трёх клиентов (если имя занято — с уникальным суффиксом, чужие
+   токены не отзываются):
+   - `opencode-<host>` — `ingest`, `mcp:read`, `mcp:write`;
+   - `jarvis` — `ingest`, `mcp:read`, `mcp:write`;
+   - `second-brain-app` — `ui`, `admin`;
+3. проверяет выданный `ui`-токен через `GET /api/v1/stats`;
+4. сохраняет токены в Keychain, пишет `config.json` (merge с настройками
+   плагина, в `app_clients` запоминаются id) и `mcp_token` (`0600`);
+5. только после этого отзывает клиентов, созданных этим приложением ранее.
+
+При сбое на любом шаге Keychain, `config.json` и `mcp_token` восстанавливаются,
+а новые клиенты отзываются. Если не удалось отозвать старого клиента, его id
+попадает в `pending_revocations` и повторяется при следующем запуске.
+
+Admin token не сохраняется. Повторный запуск сразу подключается; Settings →
+Connection → «Повернуть токены…» открывает форму снова и ротирует все три клиента.
+
 ## Подпись и sandbox
 
 - Bundle id: `com.serg.secondbrain`.

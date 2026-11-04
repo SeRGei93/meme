@@ -36,6 +36,11 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
+                if !appState.isConfigured {
+                    Button("Настроить…") {
+                        appState.presentOnboardingForRotation()
+                    }
+                }
                 SettingsLink {
                     Text("Settings…")
                 }
@@ -47,5 +52,15 @@ struct ContentView: View {
         }
         .padding(40)
         .frame(minWidth: 520, minHeight: 360)
+        .task {
+            await appState.bootstrap()
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.isOnboardingPresented },
+            set: { appState.isOnboardingPresented = $0 }
+        )) {
+            OnboardingView()
+                .environment(appState)
+        }
     }
 }

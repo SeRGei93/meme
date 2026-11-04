@@ -27,7 +27,9 @@ struct APIClient: Sendable {
     /// `/health` is public and, by contract, returns the same `Health` body with
     /// HTTP 503 when the database is unavailable. Both statuses are decoded.
     func health() async throws -> Health {
-        let request = try makeRequest(path: "health", query: [], authenticated: false)
+        let request = try makeRequest(
+            path: "health", method: "GET", query: [], body: nil, authenticated: false
+        )
         let (http, data) = try await perform(request)
 
         if http.statusCode == 200 || http.statusCode == 503,
@@ -63,14 +65,33 @@ struct APIClient: Sendable {
         try await send(path: "api/v1/stats")
     }
 
+    // MARK: - Clients (admin)
+
+    func listClients() async throws -> ClientList {
+        try await send(path: "api/v1/clients")
+    }
+
+    func createClient(_ request: CreateClientRequest) async throws -> CreateClientResponse {
+        let body = try JSONEncoder().encode(request)
+        return try await send(path: "api/v1/clients", method: "POST", body: body)
+    }
+
+    func revokeClient(id: Int64) async throws {
+        try await sendNoContent(path: "api/v1/clients/\(id)", method: "DELETE")
+    }
+
     // MARK: - Transport
 
     private func send<Response: Decodable>(
         path: String,
+        method: String = "GET",
         query: [URLQueryItem] = [],
+        body: Data? = nil,
         authenticated: Bool = true
     ) async throws -> Response {
-        let request = try makeRequest(path: path, query: query, authenticated: authenticated)
+        let request = try makeRequest(
+            path: path, method: method, query: query, body: body, authenticated: authenticated
+        )
         let (http, data) = try await perform(request)
 
         guard (200..<300).contains(http.statusCode) else {
@@ -81,6 +102,20 @@ struct APIClient: Sendable {
             return try Self.decoder.decode(Response.self, from: data)
         } catch {
             throw APIError.decoding
+        }
+    }
+
+    private func sendNoContent(
+        path: String,
+        method: String,
+        body: Data? = nil
+    ) async throws {
+        let request = try makeRequest(
+            path: path, method: method, query: [], body: body, authenticated: true
+        )
+        let (http, data) = try await perform(request)
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.mapError(status: http.statusCode, headers: http.allHeaderFields, body: data)
         }
     }
 
@@ -100,7 +135,13 @@ struct APIClient: Sendable {
         }
     }
 
-    private func makeRequest(path: String, query: [URLQueryItem], authenticated: Bool) throws -> URLRequest {
+    private func makeRequest(
+        path: String,
+        method: String,
+        query: [URLQueryItem],
+        body: Data?,
+        authenticated: Bool
+    ) throws -> URLRequest {
         let url = configuration.baseURL.appendingPathComponent(path)
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
@@ -113,8 +154,12 @@ struct APIClient: Sendable {
         }
 
         var request = URLRequest(url: finalURL, timeoutInterval: configuration.timeout)
-        request.httpMethod = "GET"
+        request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         if authenticated {
             guard let token = configuration.token, !token.isEmpty else {
                 throw APIError.unauthorized(requestID: nil)

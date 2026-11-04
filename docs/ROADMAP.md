@@ -318,16 +318,16 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] `ConfigStore`;
   - [x] `AppState` `@Observable`;
   - [x] обработка ошибок и `401`.
-- [ ] Onboarding:
-  - [ ] ввод server URL;
-  - [ ] ввод admin token;
-  - [ ] `GET /health`;
-  - [ ] создание/ротация токенов `opencode`, `jarvis`, `ui`;
-  - [ ] запись `~/.config/second-brain/config.json`;
-  - [ ] запись `mcp_token` с `0600`;
+- [x] Onboarding:
+  - [x] ввод server URL;
+  - [x] ввод admin token;
+  - [x] `GET /health`;
+  - [x] создание/ротация токенов `opencode`, `jarvis`, `ui`;
+  - [x] запись `~/.config/second-brain/config.json`;
+  - [x] запись `mcp_token` с `0600`;
   - [ ] установка OpenCode plugin;
   - [ ] правка/подсказка MCP config;
-  - [ ] проверка подключения.
+  - [x] проверка подключения.
 - [x] Launch at login:
   - [x] `SMAppService.mainApp`.
 - [x] Базовые unit-тесты API client и Keychain.
