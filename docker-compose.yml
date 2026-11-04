@@ -1,24 +1,33 @@
-# Dokploy Compose source for the Second Brain server.
-# The stack is one container, one replica, with SQLite on a named volume.
+# Прод-стек для Dokploy. Образ собирается в GitHub Actions и публикуется в
+# GHCR; Dokploy только тянет готовый :latest и перезапускает контейнер.
+# Никакой сборки на сервере нет.
+#
+# Compose Path в Dokploy: /docker-compose.yml
+# Registry в Dokploy: ghcr.io + PAT read:packages, либо пакет публичный.
+name: second-brain
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   brain:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      args:
-        VERSION: ${BRAIN_VERSION:-dev}
-    image: second-brain-brain:${BRAIN_VERSION:-dev}
+    image: ghcr.io/sergei93/meme-brain:${IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose:
       - "8080"
     environment:
-      # Required: bootstrap admin token. Set it in Dokploy → Environment.
       BRAIN_ADMIN_TOKEN: ${BRAIN_ADMIN_TOKEN:?set BRAIN_ADMIN_TOKEN in Dokploy Environment}
       BRAIN_ADDR: 0.0.0.0:8080
       BRAIN_DB: /data/brain.db
-      # Optional: OpenAI-compatible card generation. Leave all empty to keep
-      # heuristic cards only.
       BRAIN_LLM_BASE_URL: ${BRAIN_LLM_BASE_URL:-}
       BRAIN_LLM_API_KEY: ${BRAIN_LLM_API_KEY:-}
       BRAIN_LLM_MODEL: ${BRAIN_LLM_MODEL:-}
@@ -38,6 +47,7 @@ services:
         failure_action: rollback
       restart_policy:
         condition: unless-stopped
+    logging: *logging
 
 volumes:
   brain-data:

@@ -31,18 +31,49 @@ OpenRouter — OpenAI-совместимый endpoint, отдельный SDK н
 
 Если LLM не задан, сервер работает: карточки остаются heuristic, поиск работает.
 
-## 2. Создать приложение в Dokploy
+## 2. CI/CD: сборка в GitHub Actions, доставка в Dokploy
 
-1. **Create Project** → **Compose**.
-2. Provider **GitHub**, репозиторий `SeRGei93/meme`, branch `main`.
-3. **Compose Path**: `/docker-compose.yml`.
-4. Trigger: **On Push** (Autodeploy можно держать выключенным и деплоить кнопкой).
-5. **Environment** — вставить переменные из `.env.example` с реальными значениями.
-6. **Deploy**.
+Сборка идёт **только на GitHub Actions**, сервер ничего не компилирует:
 
-Docker build идёт из `server/`, поэтому `server/Dockerfile` и `server/.dockerignore`
-используются как есть. `BRAIN_ADMIN_TOKEN` обязателен: без него контейнер упадёт на
-старте с понятной ошибкой в логах.
+1. Push в `main` (пути `server/**`, `plugin/**`, `tools/**`, compose, workflow).
+2. Job `check`: `go vet`/`go test`, контрактные тесты `tools`, тесты и typecheck
+   плагина.
+3. Job `build`: `docker buildx` собирает `server/Dockerfile` и пушит в GHCR
+   `ghcr.io/sergei93/meme-brain:<sha>` и `:latest`.
+4. Job `deploy`: дергает Dokploy webhook. Dokploy делает `compose up` с
+   `pull_policy: always` и запускает уже готовый образ.
+
+### Однократная настройка
+
+1. **Dokploy → Settings → Registry**: добавить `ghcr.io`, username `SeRGei93`,
+   PAT с правом `read:packages`. Либо после первой сборки сделать пакет
+   `meme-brain` публичным (GitHub → Packages → Package settings → Change
+   visibility).
+2. **Dokploy → Compose → Webhook**: скопировать URL и сохранить в GitHub
+   secrets:
+
+   ```bash
+   gh secret set DOKPLOY_DEPLOY_WEBHOOK -R SeRGei93/meme
+   ```
+
+3. В Dokploy **Autodeploy выключить**: деплой запускает workflow после сборки,
+   иначе Dokploy подтянет предыдущий `:latest`.
+4. **Create Project → Compose**: GitHub `SeRGei93/meme`, branch `main`,
+   **Compose Path**: `/docker-compose.yml`.
+5. **Environment** — переменные из `.env.example` (см. §1).
+6. Первый раз: дождаться зелёного workflow, затем **Deploy** в Dokploy.
+
+`BRAIN_VERSION` больше не нужен: версия в `/health` — это SHA коммита, переданный
+в `--build-arg VERSION` при сборке. `BRAIN_ADMIN_TOKEN` обязателен: без него
+контейнер упадёт на старте.
+
+## 2a. Обновление и откат
+
+- Обновление: merge в `main` → workflow → Dokploy webhook. Вручную: **Deploy**
+  (не Rebuild) — он подтянет свежий `:latest`.
+- Откат: задать в Dokploy Environment `IMAGE_TAG=<полный sha>` и нажать
+  **Deploy**. Workflow публикует тег на каждый коммит.
+- Локальная сборка: `docker compose -f docker-compose.local.yml up --build`.
 
 ## 3. Домен и TLS
 
@@ -63,7 +94,7 @@ Dokploy/Traefik сам выпустит сертификат после того
 DOMAIN=https://brain.example.com
 
 curl -fsS "$DOMAIN/health" | jq
-# {"status":"ok","version":"dev","schema_version":3,...,"database":{"status":"ok","fts5":true}}
+# {"status":"ok","version":"<commit-sha>","schema_version":3,...,"database":{"status":"ok","fts5":true}}
 
 curl -sS -o /dev/null -w '%{http_code}\n' "$DOMAIN/api/v1/stats"          # 401
 curl -sS "$DOMAIN/api/v1/stats" -H "Authorization: Bearer $BRAIN_ADMIN_TOKEN" | jq
@@ -78,10 +109,10 @@ curl -sS "$DOMAIN/api/v1/stats" -H "Authorization: Bearer $BRAIN_ADMIN_TOKEN" | 
 DOMAIN=https://brain.example.com
 ADMIN=$BRAIN_ADMIN_TOKEN
 
-# OpenCode plugin (ingest). mcp:read добавится, когда выйдет #13.
+# OpenCode plugin + MCP
 curl -fsS -X POST "$DOMAIN/api/v1/clients" \
   -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
-  -d '{"name":"opencode-macbook","kind":"opencode","scopes":["ingest"]}' | jq
+  -d '{"name":"opencode-macbook","kind":"opencode","scopes":["ingest","mcp:read","mcp:write"]}' | jq
 
 # macOS app
 curl -fsS -X POST "$DOMAIN/api/v1/clients" \
@@ -139,7 +170,8 @@ SQLite лежит в `/data/brain.db` на volume `brain-data`.
 # до редеплоя
 curl -fsS "$DOMAIN/health" | jq '.schema_version'
 
-# Dokploy → Deploy (или push в main при включённом Autodeploy)
+# Dokploy → Deploy (подтянет свежий :latest)
+# или merge в main → GitHub Actions соберёт образ и вызовет Dokploy webhook.
 
 # после
 curl -fsS "$DOMAIN/health" | jq '.schema_version'

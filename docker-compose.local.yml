@@ -1,0 +1,28 @@
+# Локальная сборка без GHCR: docker compose -f docker-compose.local.yml up --build
+# Прод использует docker-compose.yml и готовый образ из GHCR.
+name: second-brain-local
+
+services:
+  brain:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      args:
+        VERSION: local
+    image: second-brain-brain:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      BRAIN_ADMIN_TOKEN: ${BRAIN_ADMIN_TOKEN:?set BRAIN_ADMIN_TOKEN}
+      BRAIN_ADDR: 0.0.0.0:8080
+      BRAIN_DB: /data/brain.db
+      BRAIN_LLM_BASE_URL: ${BRAIN_LLM_BASE_URL:-}
+      BRAIN_LLM_API_KEY: ${BRAIN_LLM_API_KEY:-}
+      BRAIN_LLM_MODEL: ${BRAIN_LLM_MODEL:-}
+      BRAIN_LLM_MAX_INPUT_CHARS: ${BRAIN_LLM_MAX_INPUT_CHARS:-24000}
+    volumes:
+      - brain-data:/data
+
+volumes:
+  brain-data:
