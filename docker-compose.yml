@@ -1,0 +1,43 @@
+# Dokploy Compose source for the Second Brain server.
+# The stack is one container, one replica, with SQLite on a named volume.
+services:
+  brain:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${BRAIN_VERSION:-dev}
+    image: second-brain-brain:${BRAIN_VERSION:-dev}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    expose:
+      - "8080"
+    environment:
+      # Required: bootstrap admin token. Set it in Dokploy → Environment.
+      BRAIN_ADMIN_TOKEN: ${BRAIN_ADMIN_TOKEN:?set BRAIN_ADMIN_TOKEN in Dokploy Environment}
+      BRAIN_ADDR: 0.0.0.0:8080
+      BRAIN_DB: /data/brain.db
+      # Optional: OpenAI-compatible card generation. Leave all empty to keep
+      # heuristic cards only.
+      BRAIN_LLM_BASE_URL: ${BRAIN_LLM_BASE_URL:-}
+      BRAIN_LLM_API_KEY: ${BRAIN_LLM_API_KEY:-}
+      BRAIN_LLM_MODEL: ${BRAIN_LLM_MODEL:-}
+      BRAIN_LLM_MAX_INPUT_CHARS: ${BRAIN_LLM_MAX_INPUT_CHARS:-24000}
+    volumes:
+      - brain-data:/data
+    healthcheck:
+      test: ["CMD", "/brain", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: unless-stopped
+
+volumes:
+  brain-data:

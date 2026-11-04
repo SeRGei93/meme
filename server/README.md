@@ -56,3 +56,8 @@ docker run --rm -p 8080:8080 \
 ```
 
 Образ multi-stage, работает от non-root (`65532:65532`), БД лежит в `/data`.
+
+## Деплой
+
+Dokploy-стек (compose, volume, домен, TLS) описан в
+[`docs/DEPLOY.md`](../docs/DEPLOY.md). Compose-файл — в корне репозитория.
