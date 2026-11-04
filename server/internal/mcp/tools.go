@@ -11,6 +11,11 @@ type ToolInfo struct {
 
 var readOnly = map[string]any{"readOnlyHint": true, "idempotentHint": true}
 
+// MCP clients cannot resolve external $refs (openapi.yaml is not served over
+// MCP), and a loose object schema still matches every structuredContent this
+// server returns. The concrete field shapes live in docs/openapi.yaml.
+var objectSchema = map[string]any{"type": "object"}
+
 var searchInfo = ToolInfo{
 	Name:        "search",
 	Description: "Search Second Brain memory. Returns ranked cards without raw text. Use get_record for the full text.",
@@ -25,20 +30,8 @@ var searchInfo = ToolInfo{
 			"source":  map[string]any{"type": "string", "enum": []any{"opencode", "jarvis"}},
 		},
 	},
-	OutputSchema: map[string]any{
-		"type":     "object",
-		"required": []any{"items", "total", "query", "limit"},
-		"properties": map[string]any{
-			"items": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"$ref": "openapi.yaml#/components/schemas/SearchHit"},
-			},
-			"total": map[string]any{"type": "integer", "minimum": 0},
-			"query": map[string]any{"type": "string"},
-			"limit": map[string]any{"type": "integer", "minimum": 1},
-		},
-	},
-	Annotations: readOnly,
+	OutputSchema: objectSchema,
+	Annotations:  readOnly,
 }
 
 var getRecordInfo = ToolInfo{
@@ -52,7 +45,7 @@ var getRecordInfo = ToolInfo{
 			"id": map[string]any{"type": "integer", "format": "int64", "minimum": 1},
 		},
 	},
-	OutputSchema: map[string]any{"$ref": "openapi.yaml#/components/schemas/Record"},
+	OutputSchema: objectSchema,
 	Annotations:  readOnly,
 }
 
@@ -73,17 +66,8 @@ var rememberInfo = ToolInfo{
 			"occurred_at": map[string]any{"type": "string", "format": "date-time"},
 		},
 	},
-	OutputSchema: map[string]any{
-		"type":     "object",
-		"required": []any{"record_id", "job_id", "status", "replayed"},
-		"properties": map[string]any{
-			"record_id": map[string]any{"type": "integer", "format": "int64", "minimum": 1},
-			"job_id":    map[string]any{"type": []any{"integer", "null"}, "format": "int64"},
-			"status":    map[string]any{"type": "string", "enum": []any{"indexed", "queued"}},
-			"replayed":  map[string]any{"type": "boolean"},
-		},
-	},
-	Annotations: map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+	OutputSchema: objectSchema,
+	Annotations:  map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
 }
 
 var listProjectsInfo = ToolInfo{
@@ -96,7 +80,7 @@ var listProjectsInfo = ToolInfo{
 			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
 		},
 	},
-	OutputSchema: map[string]any{"$ref": "openapi.yaml#/components/schemas/ProjectList"},
+	OutputSchema: objectSchema,
 	Annotations:  readOnly,
 }
 
@@ -104,6 +88,6 @@ var statsInfo = ToolInfo{
 	Name:         "stats",
 	Description:  "Return record, project, client and queue counts plus database state.",
 	InputSchema:  map[string]any{"type": "object", "additionalProperties": false},
-	OutputSchema: map[string]any{"$ref": "openapi.yaml#/components/schemas/Stats"},
+	OutputSchema: objectSchema,
 	Annotations:  readOnly,
 }

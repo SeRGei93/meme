@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/SeRGei93/meme/server/internal/mcp"
@@ -140,6 +141,21 @@ func TestToolsListExposesFiveContractTools(t *testing.T) {
 		if tool["inputSchema"] == nil {
 			t.Errorf("tools[%d] has no inputSchema", i)
 		}
+	}
+}
+
+func TestToolSchemasAreSelfContained(t *testing.T) {
+	server := mcp.New("test", &fakeBackend{})
+	result, errObj := server.Handle(context.Background(), mcp.Request{Method: mcp.MethodToolsList}, mcp.CallContext{})
+	if errObj != nil {
+		t.Fatalf("Handle() error = %+v", errObj)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal tools/list: %v", err)
+	}
+	if strings.Contains(string(raw), "openapi.yaml") || strings.Contains(string(raw), `"$ref"`) {
+		t.Errorf("tools/list contains an external or unresolved $ref: %s", raw)
 	}
 }
 

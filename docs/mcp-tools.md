@@ -91,6 +91,10 @@ HTTP-слой проверяет токен до JSON-RPC:
   [openapi.yaml](openapi.yaml).
 - `content[0].text` — тот же JSON строкой, для клиентов без structured output.
 - `isError` отсутствует или `false`.
+- `outputSchema` в `tools/list` — `{"type": "object"}`. Клиенты не умеют
+  резолвить внешние `$ref` на `openapi.yaml` (файл не отдаётся по MCP), поэтому
+  точные поля `structuredContent` заданы моделями `openapi.yaml`, а не ссылкой в
+  схеме инструмента.
 
 Ошибка выполнения инструмента (валидация, `not_found`, внутренняя ошибка) — это **не**
 JSON-RPC error, а успешный JSON-RPC ответ с `isError: true`:
