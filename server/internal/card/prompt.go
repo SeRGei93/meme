@@ -83,7 +83,7 @@ func writeMetadata(builder *strings.Builder, metadata map[string]any) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		fmt.Fprintf(builder, "%s: %q\n", key, fmt.Sprint(metadata[key]))
+		fmt.Fprintf(builder, "%q: %q\n", key, fmt.Sprint(metadata[key]))
 	}
 }
 

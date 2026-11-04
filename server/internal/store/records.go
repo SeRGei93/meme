@@ -507,66 +507,54 @@ func (s *Store) SaveCard(ctx context.Context, recordID int64, finalizedAt *time.
 		cardModel = model
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE records
-		SET title = ?, summary = ?, questions = ?, keywords = ?, atoms = ?,
-			card_model = ?, card_status = ?, indexed_at = ?
-		WHERE id = ? AND COALESCE(finalized_at, '') = ? AND card_status = ?`,
+	return s.updateQueuedCard(ctx, recordID, finalizedAt,
+		"title = ?, summary = ?, questions = ?, keywords = ?, atoms = ?, card_model = ?, card_status = ?, indexed_at = ?",
 		card.Title, card.Summary,
 		joinList(card.Questions), joinList(card.Keywords), joinList(card.Atoms),
 		cardModel, CardStatusOK, formatTime(now),
-		recordID, cardVersion(finalizedAt), CardStatusQueued,
 	)
-	if err != nil {
-		return false, fmt.Errorf("save card for record %d: %w", recordID, err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("save card for record %d: %w", recordID, err)
-	}
-	return affected > 0, nil
 }
 
 // FailCard records that card generation failed. The heuristic card written at
 // ingest stays in place so the record is still searchable.
 func (s *Store) FailCard(ctx context.Context, recordID int64, finalizedAt *time.Time, now time.Time) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE records
-		SET card_status = ?, indexed_at = ?
-		WHERE id = ? AND COALESCE(finalized_at, '') = ? AND card_status = ?`,
-		CardStatusFailed, formatTime(now), recordID, cardVersion(finalizedAt), CardStatusQueued,
+	return s.updateQueuedCard(ctx, recordID, finalizedAt,
+		"card_status = ?, indexed_at = ?",
+		CardStatusFailed, formatTime(now),
 	)
-	if err != nil {
-		return false, fmt.Errorf("fail card for record %d: %w", recordID, err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("fail card for record %d: %w", recordID, err)
-	}
-	return affected > 0, nil
 }
 
 // KeepHeuristicCard ends card generation without an LLM and records that the
 // ingest-time heuristic card is the final card. This is used when card
 // generation is not configured, which is not an error.
 func (s *Store) KeepHeuristicCard(ctx context.Context, recordID int64, finalizedAt *time.Time, now time.Time) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE records
-		SET card_status = ?, indexed_at = ?
-		WHERE id = ? AND COALESCE(finalized_at, '') = ? AND card_status = ?`,
-		CardStatusHeuristic, formatTime(now), recordID, cardVersion(finalizedAt), CardStatusQueued,
+	return s.updateQueuedCard(ctx, recordID, finalizedAt,
+		"card_status = ?, indexed_at = ?",
+		CardStatusHeuristic, formatTime(now),
+	)
+}
+
+// updateQueuedCard applies a card transition only to the final version the job
+// was generated for. finalized_at changes on every new final version, while a
+// live capture leaves it alone.
+func (s *Store) updateQueuedCard(ctx context.Context, recordID int64, finalizedAt *time.Time, setClause string, args ...any) (bool, error) {
+	args = append(args, recordID, finalizationKey(finalizedAt), CardStatusQueued)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE records SET `+setClause+`
+		 WHERE id = ? AND COALESCE(finalized_at, '') = ? AND card_status = ?`,
+		args...,
 	)
 	if err != nil {
-		return false, fmt.Errorf("keep heuristic card for record %d: %w", recordID, err)
+		return false, fmt.Errorf("update card for record %d: %w", recordID, err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("keep heuristic card for record %d: %w", recordID, err)
+		return false, fmt.Errorf("update card for record %d: %w", recordID, err)
 	}
 	return affected > 0, nil
 }
 
-func cardVersion(finalizedAt *time.Time) string {
+func finalizationKey(finalizedAt *time.Time) string {
 	if finalizedAt == nil {
 		return ""
 	}

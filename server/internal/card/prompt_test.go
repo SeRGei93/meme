@@ -53,8 +53,8 @@ func TestBuildMessagesIncludesMetadataAndSessionText(t *testing.T) {
 	for _, want := range []string{
 		"Fix SQLite migration ordering",
 		"github.com/SeRGei93/meme",
-		`branch: "main"`,
-		`agent: "build"`,
+		`"branch": "main"`,
+		`"agent": "build"`,
 		"Why does migration 004 run before 003?",
 		"<session_content>",
 	} {

@@ -71,7 +71,7 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 		return err
 	}
 	if !applied {
-		g.logger().Info("card discarded because a newer final version was captured",
+		g.logger().Info("card discarded because the record is no longer queued for this final version",
 			"record_id", record.ID,
 		)
 		return nil

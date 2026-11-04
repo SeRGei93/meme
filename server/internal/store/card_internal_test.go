@@ -262,6 +262,89 @@ func TestSaveCardLetsANewerFinalVersionWriteItsOwnCard(t *testing.T) {
 	}
 }
 
+func TestFailJobDoesNotFailANewerCardVersion(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+
+	first := ingest.Bundle{
+		BundleID:   "4f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3",
+		ExternalID: "ses_card_fail_version",
+		ProjectKey: "github.com/SeRGei93/meme",
+		Title:      "Session ses_card_fail_version",
+		Final:      true,
+		StartedAt:  now.Add(-time.Hour),
+		UpdatedAt:  now,
+		Messages: []ingest.Message{
+			{ID: "msg_1", Role: ingest.RoleUser, Text: "First final question", At: now},
+		},
+	}
+	firstResult, err := st.IngestSession(ctx, IngestParams{
+		ClientID:       clientID,
+		Source:         "opencode",
+		IdempotencyKey: first.BundleID,
+		Bundle:         first,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("first IngestSession() error = %v", err)
+	}
+	if firstResult.JobID == nil {
+		t.Fatal("first ingest returned no job")
+	}
+
+	newer := first
+	newer.BundleID = "5f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3"
+	newer.UpdatedAt = now.Add(10 * time.Minute)
+	newer.Messages = []ingest.Message{
+		{ID: "msg_2", Role: ingest.RoleUser, Text: "A newer final question", At: now.Add(10 * time.Minute)},
+	}
+	newerResult, err := st.IngestSession(ctx, IngestParams{
+		ClientID:       clientID,
+		Source:         "opencode",
+		IdempotencyKey: newer.BundleID,
+		Bundle:         newer,
+		Now:            now.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("newer IngestSession() error = %v", err)
+	}
+
+	claimed, ok, err := st.ClaimNextJob(ctx, now)
+	if err != nil {
+		t.Fatalf("ClaimNextJob() error = %v", err)
+	}
+	if !ok || claimed.ID != *firstResult.JobID {
+		t.Fatalf("ClaimNextJob() = (%+v, %v), want the older job %d", claimed, ok, *firstResult.JobID)
+	}
+	if err := st.FailJob(ctx, claimed.ID, now.Add(11*time.Minute), "llm is down"); err != nil {
+		t.Fatalf("FailJob() error = %v", err)
+	}
+
+	current, err := st.GetRecord(ctx, firstResult.RecordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if current.CardStatus != CardStatusQueued {
+		t.Errorf("CardStatus after the old job failed = %q, want queued for the newer version", current.CardStatus)
+	}
+
+	generated := ingest.Card{
+		Title:     "Card for the newer version",
+		Summary:   "Generated from the newer final content.",
+		Questions: []string{"a?", "b?", "c?", "d?", "e?"},
+		Keywords:  []string{"newer"},
+		Atoms:     []string{"newer atom"},
+	}
+	applied, err := st.SaveCard(ctx, newerResult.RecordID, current.FinalizedAt, generated, "test-model", now.Add(12*time.Minute))
+	if err != nil {
+		t.Fatalf("SaveCard() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("SaveCard() for the newer version was discarded after the old job failed")
+	}
+}
+
 func TestFailCardKeepsTheHeuristicCard(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()
