@@ -347,3 +347,35 @@ test('a permanently failing session is dropped after three launches', async () =
   assert.equal(fourth.skipped, true);
   assert.equal(h.captures.filter((capture) => capture.id === 'b').length, 3);
 });
+
+test('a resumed walk does not spend retry attempts on unvisited pending ids', async () => {
+  const controller = new AbortController();
+  let sleepCount = 0;
+  const h = harness(
+    {
+      start: { ids: ['a', 'b'], next: 'p2' },
+      p2: { ids: ['c'], next: 'p3' },
+      p3: { ids: ['d'] },
+    },
+    {
+      failCapture: (id) => id === 'b',
+      sleep: async () => {
+        sleepCount += 1;
+        if (sleepCount === 3) controller.abort();
+      },
+      signal: controller.signal,
+    },
+  );
+
+  await runBackfill(h.deps);
+  const afterAbort = stateFrom(h.store);
+  assert.equal(afterAbort?.nextCursor, 'p3');
+  assert.deepEqual(afterAbort?.pending, ['b']);
+  assert.equal(afterAbort?.attempts?.['b'], 1);
+
+  await runBackfill({ ...h.deps, signal: new AbortController().signal });
+
+  const resumed = stateFrom(h.store);
+  assert.deepEqual(resumed?.pending, ['b']);
+  assert.equal(resumed?.attempts?.['b'], 1, 'b was not visited, so no attempt is spent');
+});

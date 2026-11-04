@@ -110,6 +110,9 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillResult> {
   const retrying = pending.size > 0;
 
   let cursor = state.nextCursor;
+  // The "vanished from list" check is only valid after a full walk from the
+  // beginning; on a resumed walk pending ids may live on pages already skipped.
+  const startedFromBeginning = cursor === undefined;
   let restarted = false;
   let pages = 0;
   let sessions = 0;
@@ -133,6 +136,8 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillResult> {
       state.completedAt = now().toISOString();
       state.pending = undefined;
       state.attempts = undefined;
+      pending.clear();
+      attempts.clear();
     }
     await persist();
     return { sessions, written, failed, pages, skipped: false };
@@ -210,12 +215,15 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillResult> {
 
     if (next === undefined) {
       // A pending session that vanished from the list (deleted or archived)
-      // would otherwise block completion forever.
-      for (const id of [...pending]) {
-        if (seen.has(id)) continue;
-        const count = (attempts.get(id) ?? 0) + 1;
-        attempts.set(id, count);
-        if (count >= MAX_ATTEMPTS) pending.delete(id);
+      // would otherwise block completion forever. Skip this on a resumed walk:
+      // unseen ids may simply be on pages before the resume cursor.
+      if (startedFromBeginning) {
+        for (const id of [...pending]) {
+          if (seen.has(id)) continue;
+          const count = (attempts.get(id) ?? 0) + 1;
+          attempts.set(id, count);
+          if (count >= MAX_ATTEMPTS) pending.delete(id);
+        }
       }
       return finish(true);
     }
