@@ -40,28 +40,26 @@ OpenRouter — OpenAI-совместимый endpoint, отдельный SDK н
    плагина.
 3. Job `build`: `docker buildx` собирает `server/Dockerfile` и пушит в GHCR
    `ghcr.io/sergei93/meme-brain:<sha>` и `:latest`.
-4. Job `deploy`: дергает Dokploy webhook. Dokploy делает `compose up` с
-   `pull_policy: always` и запускает уже готовый образ.
+4. Job `deploy`: после успешной сборки пушит git-тег `deploy-<run_id>`.
+   Dokploy с Trigger Type **Tag** + Autodeploy **ON** запускает `compose up` с
+   `pull_policy: always` и поднимает уже готовый образ.
+
+Почему тег, а не webhook: в текущей версии Dokploy webhook отвечает
+`400 Automatic deployments are disabled`, если Autodeploy выключен, а при
+включённом On Push он сработал бы раньше сборки. Тег гарантирует порядок.
 
 ### Однократная настройка
 
 1. **Dokploy → Settings → Registry**: добавить `ghcr.io`, username `SeRGei93`,
-   PAT с правом `read:packages`. Либо после первой сборки сделать пакет
-   `meme-brain` публичным (GitHub → Packages → Package settings → Change
-   visibility).
-2. **Dokploy → Compose → Webhook**: скопировать URL и сохранить в GitHub
-   secrets:
-
-   ```bash
-   gh secret set DOKPLOY_DEPLOY_WEBHOOK -R SeRGei93/meme
-   ```
-
-3. В Dokploy **Autodeploy выключить**: деплой запускает workflow после сборки,
-   иначе Dokploy подтянет предыдущий `:latest`.
-4. **Create Project → Compose**: GitHub `SeRGei93/meme`, branch `main`,
+   PAT с правом `read:packages`. Либо оставить пакет `meme-brain` публичным
+   (GitHub → Packages → Package settings → Change visibility) — он уже
+   публичный, тогда registry не нужен.
+2. **Create Project → Compose**: GitHub `SeRGei93/meme`, branch `main`,
    **Compose Path**: `/docker-compose.yml`.
-5. **Environment** — переменные из `.env.example` (см. §1).
-6. Первый раз: дождаться зелёного workflow, затем **Deploy** в Dokploy.
+3. **Trigger Type: Tag**, **Autodeploy: ON**. Push ветки `main` Dokploy
+   игнорирует; деплой запускает только тег от workflow.
+4. **Environment** — переменные из `.env.example` (см. §1).
+5. Первый раз: дождаться зелёного workflow, затем **Deploy** в Dokploy.
 
 `BRAIN_VERSION` больше не нужен: версия в `/health` — это SHA коммита, переданный
 в `--build-arg VERSION` при сборке. `BRAIN_ADMIN_TOKEN` обязателен: без него
@@ -69,8 +67,8 @@ OpenRouter — OpenAI-совместимый endpoint, отдельный SDK н
 
 ## 2a. Обновление и откат
 
-- Обновление: merge в `main` → workflow → Dokploy webhook. Вручную: **Deploy**
-  (не Rebuild) — он подтянет свежий `:latest`.
+- Обновление: merge в `main` → workflow собирает образ → пушит тег → Dokploy
+  деплоит. Вручную: **Deploy** (не Rebuild) — подтянет свежий `:latest`.
 - Откат: задать в Dokploy Environment `IMAGE_TAG=<полный sha>` и нажать
   **Deploy**. Workflow публикует тег на каждый коммит.
 - Локальная сборка: `docker compose -f docker-compose.local.yml up --build`.

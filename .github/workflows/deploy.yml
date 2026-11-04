@@ -1,14 +1,14 @@
-# CI/CD в стиле mastersapp: проверки → сборка образа в GHCR → webhook Dokploy.
+# CI/CD в стиле mastersapp: проверки → сборка образа в GHCR → тег деплоя.
 # Dokploy только тянет готовый образ (pull_policy: always), на сервере ничего
-# не компилируется. Авто-деплой Dokploy на push должен быть выключен: деплой
-# запускает этот workflow ПОСЛЕ успешной сборки, иначе Dokploy подтянет
-# предыдущий :latest.
+# не компилируется.
 #
-# Один раз настроить:
-#   1. Dokploy → Compose → Webhook → скопировать URL.
-#   2. gh secret set DOKPLOY_DEPLOY_WEBHOOK -R SeRGei93/meme
-#   3. Dokploy → Settings → Registry: ghcr.io + PAT с read:packages
-#      (или сделать пакет ghcr.io/sergei93/meme-brain публичным).
+# Dokploy: Trigger Type = Tag, Autodeploy = ON. Push ветки main его не трогает;
+# после успешной сборки workflow пушит тег deploy-<run_id>, и Dokploy деплоит
+# уже готовый :latest. Webhook при выключенном Autodeploy отвечает
+# "Automatic deployments are disabled", поэтому используется тег.
+#
+# Один раз настроить: Dokploy → Settings → Registry (ghcr.io + PAT read:packages)
+# либо оставить пакет публичным. Compose Path: /docker-compose.yml.
 name: CI/CD
 
 on:
@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -78,48 +78,21 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
 
-  # Запускается только после успешной сборки: к этому моменту :latest уже
-  # указывает на новый коммит.
+  # Запускается только после успешной сборки. Dokploy настроен на Trigger Type
+  # "Tag" + Autodeploy ON: push ветки его не трогает, а тег ниже запускает
+  # деплой уже готового :latest. Webhook при выключенном Autodeploy Dokploy
+  # отклоняет ("Automatic deployments are disabled"), поэтому тег надёжнее.
   deploy:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: github.ref == 'refs/heads/main'
     steps:
-      - name: Trigger Dokploy deploy
-        env:
-          DOKPLOY_DEPLOY_WEBHOOK: ${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}
-          IMAGE_SHA: ${{ github.sha }}
-          DEPLOY_REF: ${{ github.ref_name }}
-          DEPLOY_MESSAGE: ${{ github.event.head_commit.message }}
+      - uses: actions/checkout@v5
+
+      - name: Push deploy tag
         run: |
-          if [ -z "$DOKPLOY_DEPLOY_WEBHOOK" ]; then
-            echo "::warning::DOKPLOY_DEPLOY_WEBHOOK не задан — деплой пропущен. Добавьте webhook в secrets."
-            exit 0
-          fi
-
-          # Dokploy проверяет ветку по GitHub-payload. Синтетический коммит с
-          # путями сервера нужен, чтобы watch paths тоже сработали.
-          commits=$(jq -c '[.commits[]? | {added: (.added // []), modified: (.modified // []), removed: (.removed // [])}] + [{"added":[],"modified":["server/cmd/brain/main.go","server/Dockerfile","docker-compose.yml",".github/workflows/deploy.yml"],"removed":[]}]' "$GITHUB_EVENT_PATH")
-
-          payload=$(mktemp)
-          jq -n \
-            --arg ref "refs/heads/${DEPLOY_REF}" \
-            --arg sha "${IMAGE_SHA}" \
-            --arg message "${DEPLOY_MESSAGE:-$IMAGE_SHA}" \
-            --argjson commits "$commits" \
-            '{ref: $ref, head_commit: {id: $sha, message: $message}, commits: $commits}' > "$payload"
-
-          status=$(curl --silent --show-error --max-time 60 \
-            --retry 3 --retry-delay 5 \
-            -o /tmp/dokploy-response.json -w '%{http_code}' \
-            -X POST "$DOKPLOY_DEPLOY_WEBHOOK" \
-            -H 'Content-Type: application/json' \
-            -H 'X-GitHub-Event: push' \
-            --data-binary "@$payload")
-          cat /tmp/dokploy-response.json || true
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "::error::Dokploy webhook failed with HTTP $status"
-            exit 1
-          fi
-          echo "Dokploy deploy triggered for ${IMAGE_SHA}"
+          tag="deploy-${GITHUB_RUN_ID}"
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "Pushed $tag; Dokploy deploys tag builds after the image push."
