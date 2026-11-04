@@ -119,6 +119,12 @@ struct ConfigStore {
         }
     }
 
+    /// Keys owned exclusively by the app. A `nil` value removes the key, so a
+    /// rollback can restore a config that predates onboarding.
+    private static let appOwnedKeys: Set<String> = [
+        "server_url", "app_clients", "pending_revocations",
+    ]
+
     /// Writes the app-owned keys, preserving every other key already present in
     /// the shared file (plugin settings, fields added by newer versions).
     func save(_ config: AppConfig) throws {
@@ -126,6 +132,9 @@ struct ConfigStore {
             try ensureDirectory()
             let encoded = try JSONEncoder().encode(config)
             var object = existingObject() ?? [:]
+            for key in Self.appOwnedKeys {
+                object.removeValue(forKey: key)
+            }
             if let patch = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] {
                 object.merge(patch) { _, new in new }
             }

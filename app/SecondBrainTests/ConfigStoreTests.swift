@@ -87,6 +87,19 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(object["schema"] as? Int, 2)
     }
 
+    func testSavingRemovesAppOwnedKeysWhenTheyBecomeNil() throws {
+        let client = StoredClient(id: 7, name: "jarvis")
+        try store.save(AppConfig(serverURL: URL(string: "https://brain.test")!, appClients: ["jarvis": client], pendingRevocations: [9, 10]))
+
+        try store.save(AppConfig(serverURL: URL(string: "https://brain.test")!))
+
+        let data = try Data(contentsOf: store.fileURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(object["app_clients"])
+        XCTAssertNil(object["pending_revocations"])
+        XCTAssertEqual(object["server_url"] as? String, "https://brain.test")
+    }
+
     func testMalformedFileThrowsInvalidConfig() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("{not json".utf8).write(to: store.fileURL)

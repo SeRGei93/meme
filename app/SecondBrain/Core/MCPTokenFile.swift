@@ -5,7 +5,7 @@ enum MCPTokenFileError: Error, Equatable {
 }
 
 extension MCPTokenFileError: LocalizedError {
-    var errorDescription: String? { "Не удалось записать mcp_token" }
+    var errorDescription: String? { "Не удалось обновить mcp_token" }
 }
 
 /// `~/.config/second-brain/mcp_token` is read by OpenCode, which cannot use the

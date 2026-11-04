@@ -151,6 +151,31 @@ final class OnboardingServiceTests: XCTestCase {
         XCTAssertFalse(server.activeClients.contains { $0.name.hasPrefix("opencode-macbook-") && !idsBefore.contains($0.id) })
     }
 
+    func testPendingRevocationsAreRetriedAndRemoved() async throws {
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+        let firstIDs = Set(try XCTUnwrap(try ConfigStore(directory: directory).load()?.appClients).values.map(\.id))
+
+        server.failRevokeIDs = firstIDs
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+
+        var config = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        XCTAssertEqual(Set(config.pendingRevocations ?? []), firstIDs)
+        for id in firstIDs {
+            XCTAssertTrue(server.isActive(id: id))
+        }
+
+        server.failRevokeIDs = []
+        _ = try await service.run(serverURL: serverURL, adminToken: adminToken)
+
+        config = try XCTUnwrap(try ConfigStore(directory: directory).load())
+        XCTAssertNil(config.pendingRevocations)
+        let raw = try String(contentsOf: configFileURL, encoding: .utf8)
+        XCTAssertFalse(raw.contains("pending_revocations"))
+        for id in firstIDs {
+            XCTAssertFalse(server.isActive(id: id), "pending id \(id) must be revoked on the next run")
+        }
+    }
+
     func testRevokeOfUnknownPreviousClientIsIgnored() async throws {
         // Simulate a config that points at a client the server no longer knows.
         try ConfigStore(directory: directory).save(
@@ -268,6 +293,7 @@ private final class FakeServer: @unchecked Sendable {
     """
     var rejectAdmin = false
     var failCreateKinds: Set<String> = []
+    var failRevokeIDs: Set<Int64> = []
 
     init(activeClients: [ClientInfo]) {
         clients = activeClients
@@ -360,6 +386,9 @@ private final class FakeServer: @unchecked Sendable {
 
         case ("DELETE", _) where path.hasPrefix("/api/v1/clients/"):
             let id = try XCTUnwrap(Int64(path.split(separator: "/").last ?? ""))
+            if lock.withLock({ failRevokeIDs.contains(id) }) {
+                return .init(status: 500, body: Data(#"{"error":{"code":"internal_error","message":"revoke failed"}}"#.utf8))
+            }
             let found = lock.withLock { () -> Bool in
                 guard let index = clients.firstIndex(where: { $0.id == id }),
                       clients[index].revokedAt == nil else {

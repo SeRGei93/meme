@@ -4,6 +4,7 @@ enum OnboardingError: Error, Equatable {
     case invalidServerURL
     case invalidAdminToken
     case serverUnhealthy
+    case verificationFailed
     case missingToken
 }
 
@@ -16,6 +17,8 @@ extension OnboardingError: LocalizedError {
             return "Admin token отклонён сервером. Проверьте BRAIN_ADMIN_TOKEN"
         case .serverUnhealthy:
             return "Сервер работает, но база данных недоступна. Попробуйте позже"
+        case .verificationFailed:
+            return "Сервер выдал токен, но не принял его. Попробуйте повторить подключение"
         case .missingToken:
             return "Сервер не выдал один из токенов"
         }
@@ -47,7 +50,9 @@ struct OnboardingService {
 
     private struct Snapshot {
         let config: AppConfig?
-        let tokens: [String: String?]
+        /// `nil` when the Keychain could not be read; rollback then leaves it
+        /// untouched instead of deleting values it failed to read.
+        let tokens: [String: String?]?
         let mcpToken: String?
     }
 
@@ -112,23 +117,33 @@ struct OnboardingService {
 
             // Verify the token the app will actually use before touching disk.
             let uiClient = APIClient(baseURL: serverURL, token: ui.response.token, session: session)
-            _ = try await uiClient.stats()
+            do {
+                _ = try await uiClient.stats()
+            } catch let error as APIError where error.requiresReauthentication {
+                throw OnboardingError.verificationFailed
+            }
 
-            try persist(created: created, snapshot: snapshot, serverURL: serverURL, pending: pending)
+            let newIDs = Set(created.map(\.response.client.id))
+            let previousIDs = Set(previousClients.values.map(\.id)).subtracting(newIDs)
+            let pendingToPersist = uniqueIDs(pending + Array(previousIDs))
+            try persist(
+                created: created,
+                snapshot: snapshot,
+                serverURL: serverURL,
+                pending: pendingToPersist
+            )
+            // Old ids are already recorded in `pending_revocations`, so a crash
+            // before this loop is recovered on the next run.
+            pending = await revoke(ids: previousIDs, pending: pendingToPersist, admin: admin)
         } catch {
             await revokeCreatedClients(created.map(\.response.client.id), admin: admin)
             restore(snapshot)
             throw error
         }
 
-        pending = await revokePreviousClients(
-            previousClients,
-            excluding: Set(created.map(\.response.client.id)),
-            pending: pending,
-            admin: admin
-        )
-        if !pending.isEmpty || snapshot.config?.pendingRevocations != nil {
-            var config = (try? configStore.load()) ?? AppConfig()
+        // Rewrite the key even when everything was revoked, so a stale
+        // `pending_revocations` is removed from the shared file.
+        if var config = try? configStore.load() {
             config.pendingRevocations = pending.isEmpty ? nil : pending
             try? configStore.save(config)
         }
@@ -242,7 +257,16 @@ struct OnboardingService {
     private func takeSnapshot() -> Snapshot {
         var tokens: [String: String?] = [:]
         for account in KeychainStore.Account.all {
-            tokens[account] = try? keychain.value(for: account)
+            do {
+                tokens[account] = try keychain.value(for: account)
+            } catch {
+                tokens = [:]
+                return Snapshot(
+                    config: try? configStore.load(),
+                    tokens: nil,
+                    mcpToken: try? tokenFile.read()
+                )
+            }
         }
         return Snapshot(
             config: try? configStore.load(),
@@ -276,11 +300,13 @@ struct OnboardingService {
     }
 
     private func restore(_ snapshot: Snapshot) {
-        for (account, value) in snapshot.tokens {
-            if let value {
-                try? keychain.setValue(value, for: account)
-            } else {
-                try? keychain.deleteValue(for: account)
+        if let tokens = snapshot.tokens {
+            for (account, value) in tokens {
+                if let value {
+                    try? keychain.setValue(value, for: account)
+                } else {
+                    try? keychain.deleteValue(for: account)
+                }
             }
         }
         if let config = snapshot.config {
@@ -311,25 +337,23 @@ struct OnboardingService {
         return failed
     }
 
-    private func revokePreviousClients(
-        _ previous: [String: StoredClient],
-        excluding newIDs: Set<Int64>,
-        pending: [Int64],
-        admin: APIClient
-    ) async -> [Int64] {
-        var pending = pending
-        var seen = Set(pending)
-        for stored in previous.values where !newIDs.contains(stored.id) && !seen.contains(stored.id) {
-            seen.insert(stored.id)
+    private func revoke(ids: Set<Int64>, pending: [Int64], admin: APIClient) async -> [Int64] {
+        var pending = Set(pending)
+        for id in ids {
             do {
-                try await admin.revokeClient(id: stored.id)
+                try await admin.revokeClient(id: id)
+                pending.remove(id)
             } catch APIError.notFound {
-                continue
+                pending.remove(id)
             } catch {
-                pending.append(stored.id)
+                // Keep it for the next run.
             }
         }
-        return pending
+        return pending.sorted()
+    }
+
+    private func uniqueIDs(_ ids: [Int64]) -> [Int64] {
+        Array(Set(ids)).sorted()
     }
 
     private func revokeCreatedClients(_ ids: [Int64], admin: APIClient) async {
