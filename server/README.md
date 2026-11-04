@@ -10,6 +10,10 @@ Go-сервер Second Brain: REST API, SQLite + FTS5, auth. Все команд
 | `BRAIN_ADMIN_TOKEN` | да | — | Bootstrap admin-токен; в БД не хранится |
 | `BRAIN_ADDR` | нет | `:8080` | Адрес HTTP-сервера |
 | `BRAIN_DB` | нет | `brain.db` | Путь к SQLite-файлу |
+| `BRAIN_LLM_BASE_URL` | нет | — | OpenAI-совместимый endpoint (`…/v1`); без него генерация карточек выключена |
+| `BRAIN_LLM_API_KEY` | нет | — | Bearer-ключ LLM; можно не задавать для локального endpoint |
+| `BRAIN_LLM_MODEL` | нет | — | Модель для генерации карточек |
+| `BRAIN_LLM_MAX_INPUT_CHARS` | нет | `24000` | Лимит символов текста сессии в промпте |
 
 ## Локальный запуск
 

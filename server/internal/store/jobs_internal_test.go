@@ -277,43 +277,6 @@ func TestGetJobReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestMarkCardReadyAdvancesQueuedCard(t *testing.T) {
-	st, clientID := openJobStore(t)
-	ctx := context.Background()
-	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
-	recordID := ingestSession(t, st, clientID, "card-ready", "ses_card", now, true)
-
-	before, err := st.GetRecord(ctx, recordID)
-	if err != nil {
-		t.Fatalf("GetRecord() error = %v", err)
-	}
-	if before.CardStatus != CardStatusQueued {
-		t.Fatalf("card_status before = %q, want queued", before.CardStatus)
-	}
-
-	readyAt := now.Add(time.Minute)
-	if err := st.MarkCardReady(ctx, recordID, readyAt); err != nil {
-		t.Fatalf("MarkCardReady() error = %v", err)
-	}
-	after, err := st.GetRecord(ctx, recordID)
-	if err != nil {
-		t.Fatalf("GetRecord() error = %v", err)
-	}
-	if after.CardStatus != CardStatusOK {
-		t.Errorf("card_status after = %q, want ok", after.CardStatus)
-	}
-	if !after.IndexedAt.Equal(readyAt) {
-		t.Errorf("indexed_at = %s, want %s", after.IndexedAt, readyAt)
-	}
-	if after.Revision != before.Revision {
-		t.Errorf("revision = %d, want %d (card readiness is not a content revision)", after.Revision, before.Revision)
-	}
-
-	if err := st.MarkCardReady(ctx, recordID, readyAt.Add(time.Minute)); err != nil {
-		t.Errorf("second MarkCardReady() error = %v, want idempotent no-op", err)
-	}
-}
-
 func TestFinalizeIdleSessionsMarksFinalAndEnqueuesJob(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()

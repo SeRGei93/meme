@@ -496,20 +496,53 @@ func splitList(value string) []string {
 	return strings.Split(value, "\n")
 }
 
-// MarkCardReady advances a queued card to ok once the worker has prepared it.
-// Until issue #10 wires LLM generation, the heuristic card written by ingest is
-// the card this transition makes ready.
-func (s *Store) MarkCardReady(ctx context.Context, recordID int64, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+// SaveCard replaces the heuristic card with an LLM-generated one and marks it
+// ready. The FTS triggers index the new card in the same transaction. A stale
+// revision means the record changed while the LLM was running, so the card is
+// discarded and the newer queued job will produce its own.
+func (s *Store) SaveCard(ctx context.Context, recordID, revision int64, card ingest.Card, model string, now time.Time) (bool, error) {
+	var cardModel any
+	if model != "" {
+		cardModel = model
+	}
+
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE records
-		SET card_status = ?, indexed_at = ?
-		WHERE id = ? AND card_status = ?`,
-		CardStatusOK, formatTime(now), recordID, CardStatusQueued,
+		SET title = ?, summary = ?, questions = ?, keywords = ?, atoms = ?,
+			card_model = ?, card_status = ?, indexed_at = ?
+		WHERE id = ? AND revision = ? AND card_status = ?`,
+		card.Title, card.Summary,
+		joinList(card.Questions), joinList(card.Keywords), joinList(card.Atoms),
+		cardModel, CardStatusOK, formatTime(now),
+		recordID, revision, CardStatusQueued,
 	)
 	if err != nil {
-		return fmt.Errorf("mark record %d card ready: %w", recordID, err)
+		return false, fmt.Errorf("save card for record %d: %w", recordID, err)
 	}
-	return nil
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("save card for record %d: %w", recordID, err)
+	}
+	return affected > 0, nil
+}
+
+// FailCard records that card generation failed. The heuristic card written at
+// ingest stays in place so the record is still searchable.
+func (s *Store) FailCard(ctx context.Context, recordID, revision int64, now time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE records
+		SET card_status = ?, indexed_at = ?
+		WHERE id = ? AND revision = ? AND card_status = ?`,
+		CardStatusFailed, formatTime(now), recordID, revision, CardStatusQueued,
+	)
+	if err != nil {
+		return false, fmt.Errorf("fail card for record %d: %w", recordID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("fail card for record %d: %w", recordID, err)
+	}
+	return affected > 0, nil
 }
 
 // GetRecord returns one full record by id. Missing records return ErrNotFound.
