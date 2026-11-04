@@ -10,11 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/SeRGei93/meme/server/internal/config"
+	"github.com/SeRGei93/meme/server/internal/finalizer"
 	"github.com/SeRGei93/meme/server/internal/httpapi"
+	"github.com/SeRGei93/meme/server/internal/queue"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -68,7 +71,14 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
+
+	// Workers outlive the signal context so in-flight ingests can finish while
+	// the HTTP server drains; they are stopped explicitly after Shutdown.
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	var background sync.WaitGroup
 	defer func() {
+		stopWorkers()
+		background.Wait()
 		if err := st.Close(); err != nil {
 			logger.Error("close store", "error", err)
 		}
@@ -78,6 +88,35 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
+
+	worker := &queue.Worker{
+		Store:  st,
+		Logger: logger,
+		// Issue #10 replaces this with LLM generation and heuristic fallback.
+		// Until then the heuristic card written by ingest is marked ready, so
+		// completed jobs leave card_status in a terminal state.
+		Processor: queue.ProcessorFunc(func(ctx context.Context, job store.Job) error {
+			if job.RecordID == nil {
+				return nil
+			}
+			return st.MarkCardReady(ctx, *job.RecordID, time.Now().UTC())
+		}),
+	}
+	finalizer := &finalizer.Finalizer{Store: st, Logger: logger}
+
+	background.Add(2)
+	go func() {
+		defer background.Done()
+		if err := worker.Run(workerCtx); err != nil {
+			logger.Error("job worker stopped", "error", err)
+		}
+	}()
+	go func() {
+		defer background.Done()
+		if err := finalizer.Run(workerCtx); err != nil {
+			logger.Error("finalizer stopped", "error", err)
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -120,6 +159,8 @@ func serve() error {
 		return fmt.Errorf("http server: %w", err)
 	}
 
+	stopWorkers()
+	background.Wait()
 	logger.Info("server stopped")
 	return nil
 }
