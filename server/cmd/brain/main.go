@@ -10,11 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/SeRGei93/meme/server/internal/config"
+	"github.com/SeRGei93/meme/server/internal/finalizer"
 	"github.com/SeRGei93/meme/server/internal/httpapi"
+	"github.com/SeRGei93/meme/server/internal/queue"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -68,7 +71,12 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
+
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	var background sync.WaitGroup
 	defer func() {
+		stopWorkers()
+		background.Wait()
 		if err := st.Close(); err != nil {
 			logger.Error("close store", "error", err)
 		}
@@ -78,6 +86,31 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
+
+	worker := &queue.Worker{
+		Store:  st,
+		Logger: logger,
+		// Card generation is issue #10. The queue lifecycle is wired now so
+		// ingest jobs are processed and recover after restarts.
+		Processor: queue.ProcessorFunc(func(context.Context, store.Job) error {
+			return nil
+		}),
+	}
+	finalizer := &finalizer.Finalizer{Store: st, Logger: logger}
+
+	background.Add(2)
+	go func() {
+		defer background.Done()
+		if err := worker.Run(workerCtx); err != nil {
+			logger.Error("job worker stopped", "error", err)
+		}
+	}()
+	go func() {
+		defer background.Done()
+		if err := finalizer.Run(workerCtx); err != nil {
+			logger.Error("finalizer stopped", "error", err)
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -120,6 +153,8 @@ func serve() error {
 		return fmt.Errorf("http server: %w", err)
 	}
 
+	stopWorkers()
+	background.Wait()
 	logger.Info("server stopped")
 	return nil
 }
