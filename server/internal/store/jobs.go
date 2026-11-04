@@ -11,9 +11,13 @@ import (
 	"github.com/SeRGei93/meme/server/internal/mask"
 )
 
-// ErrInvalidJobQuery is returned when a job listing or lifecycle call violates
-// the queue contract.
+// ErrInvalidJobQuery is returned when a job listing violates the queue
+// contract.
 var ErrInvalidJobQuery = errors.New("invalid job query")
+
+// ErrJobNotRunning is returned when a lifecycle update targets a job that is
+// no longer in the running state.
+var ErrJobNotRunning = errors.New("job is not running")
 
 // JobStatus is the lifecycle state stored on ingest_jobs.
 type JobStatus string
@@ -149,42 +153,32 @@ func (s *Store) ClaimNextJob(ctx context.Context, now time.Time) (Job, bool, err
 
 // CompleteJob marks a running job done and clears its retry state.
 func (s *Store) CompleteJob(ctx context.Context, id int64, now time.Time) error {
-	return s.finishJob(ctx, id, JobDone, now, nil, "")
-}
-
-// MarkCardReady advances a queued card to ok once the worker has prepared it.
-// Until issue #10 wires LLM generation, the heuristic card written by ingest is
-// the card this transition makes ready.
-func (s *Store) MarkCardReady(ctx context.Context, recordID int64, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE records
-		SET card_status = ?, indexed_at = ?
-		WHERE id = ? AND card_status = ?`,
-		CardStatusOK, formatTime(now), recordID, CardStatusQueued,
-	)
-	if err != nil {
-		return fmt.Errorf("mark record %d card ready: %w", recordID, err)
-	}
-	return nil
+	return s.finishAttempt(ctx, id, JobDone, now, nil, "")
 }
 
 // RetryJob returns a running job to the queue with the next retry instant.
 func (s *Store) RetryJob(ctx context.Context, id int64, now, next time.Time, errText string) error {
-	return s.finishJob(ctx, id, JobQueued, now, &next, errText)
+	return s.finishAttempt(ctx, id, JobQueued, now, &next, errText)
 }
 
-// FailJob marks a running job failed after its final attempt.
+// FailJob marks a running job failed after its final attempt and moves the
+// associated card to the failed state.
 func (s *Store) FailJob(ctx context.Context, id int64, now time.Time, errText string) error {
-	return s.finishJob(ctx, id, JobFailed, now, nil, errText)
+	return s.finishAttempt(ctx, id, JobFailed, now, nil, errText)
 }
 
-func (s *Store) finishJob(ctx context.Context, id int64, status JobStatus, at time.Time, next *time.Time, errText string) error {
+func (s *Store) finishAttempt(ctx context.Context, id int64, status JobStatus, at time.Time, next *time.Time, errText string) error {
 	var nextValue any
 	if next != nil {
 		nextValue = formatTime(next.UTC())
 	}
 
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("finish job %d: %w", id, err)
+	}
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE ingest_jobs
 		SET status = ?, next_retry_at = ?, error = ?, updated_at = ?
 		WHERE id = ? AND status = ?`,
@@ -192,14 +186,34 @@ func (s *Store) finishJob(ctx context.Context, id int64, status JobStatus, at ti
 		id, string(JobRunning),
 	)
 	if err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("finish job %d: %w", id, err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("finish job %d: %w", id, err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("finish job %d: job is not running", id)
+		_ = tx.Rollback()
+		return fmt.Errorf("%w: job %d", ErrJobNotRunning, id)
+	}
+
+	if status == JobFailed {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE records
+			SET card_status = ?
+			WHERE card_status = ?
+			  AND id = (SELECT record_id FROM ingest_jobs WHERE id = ? AND kind = 'ingest')`,
+			CardStatusFailed, CardStatusQueued, id,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("fail card for job %d: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("finish job %d: %w", id, err)
 	}
 	return nil
 }
@@ -282,94 +296,6 @@ func (s *Store) ListJobs(ctx context.Context, params ListJobsParams) (JobPage, e
 		page.Items = page.Items[:limit]
 	}
 	return page, nil
-}
-
-// FinalizeIdleSessions marks unfinished sessions idle for at least idle as
-// final and enqueues one card job for each. The operation is one transaction,
-// so a crash cannot finalize a session without queueing its card.
-func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle time.Duration) (int, error) {
-	if idle <= 0 {
-		return 0, errors.New("idle must be positive")
-	}
-	now = now.UTC()
-	cutoff := now.Add(-idle)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("finalize idle sessions: %w", err)
-	}
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, client_id, source, external_id, revision
-		FROM records
-		WHERE is_final = 0 AND kind = 'session'
-		  AND julianday(updated_at) < julianday(?)
-		ORDER BY id`,
-		formatTime(cutoff),
-	)
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, fmt.Errorf("finalize idle sessions: %w", err)
-	}
-
-	type idleSession struct {
-		id         int64
-		clientID   int64
-		source     string
-		externalID string
-		revision   int64
-	}
-	var sessions []idleSession
-	for rows.Next() {
-		var session idleSession
-		if err := rows.Scan(&session.id, &session.clientID, &session.source, &session.externalID, &session.revision); err != nil {
-			_ = rows.Close()
-			_ = tx.Rollback()
-			return 0, fmt.Errorf("finalize idle sessions: %w", err)
-		}
-		sessions = append(sessions, session)
-	}
-	if err := rows.Close(); err != nil {
-		_ = tx.Rollback()
-		return 0, fmt.Errorf("finalize idle sessions: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		_ = tx.Rollback()
-		return 0, fmt.Errorf("finalize idle sessions: %w", err)
-	}
-
-	finalized := 0
-	for _, session := range sessions {
-		result, err := tx.ExecContext(ctx, `
-			UPDATE records
-			SET is_final = 1, finalized_at = ?, card_status = ?,
-				revision = revision + 1
-			WHERE id = ? AND is_final = 0`,
-			formatTime(now), CardStatusQueued, session.id,
-		)
-		if err != nil {
-			_ = tx.Rollback()
-			return 0, fmt.Errorf("finalize record %d: %w", session.id, err)
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			_ = tx.Rollback()
-			return 0, fmt.Errorf("finalize record %d: %w", session.id, err)
-		}
-		if affected == 0 {
-			continue
-		}
-		if _, err := insertIngestJob(ctx, tx, session.clientID, "", session.source, session.externalID, session.id, now); err != nil {
-			_ = tx.Rollback()
-			return 0, fmt.Errorf("enqueue finalized record %d: %w", session.id, err)
-		}
-		finalized++
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("finalize idle sessions: %w", err)
-	}
-	return finalized, nil
 }
 
 func scanJob(scanner rowScanner) (Job, error) {

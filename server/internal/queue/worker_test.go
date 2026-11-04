@@ -252,6 +252,16 @@ func TestWorkerFailsAfterMaxAttempts(t *testing.T) {
 	if job.Error != "third" {
 		t.Errorf("job.Error = %q, want the final error", job.Error)
 	}
+	if job.RecordID == nil {
+		t.Fatal("failed job has no record_id")
+	}
+	record, err := st.GetRecord(ctx, *job.RecordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusFailed {
+		t.Errorf("record.card_status = %q, want failed after terminal job failure", record.CardStatus)
+	}
 
 	if processed, err := worker.RunOnce(ctx); err != nil || processed {
 		t.Errorf("RunOnce() after failure = (%v, %v), want (false, nil)", processed, err)
@@ -293,6 +303,16 @@ func TestWorkerDoesNotRetryPermanentFailure(t *testing.T) {
 	}
 	if job.Error != "invalid card payload" {
 		t.Errorf("job.Error = %q, want the wrapped error", job.Error)
+	}
+	if job.RecordID == nil {
+		t.Fatal("failed job has no record_id")
+	}
+	record, err := st.GetRecord(ctx, *job.RecordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusFailed {
+		t.Errorf("record.card_status = %q, want failed on a permanent error", record.CardStatus)
 	}
 }
 

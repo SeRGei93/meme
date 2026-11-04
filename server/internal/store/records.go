@@ -496,6 +496,22 @@ func splitList(value string) []string {
 	return strings.Split(value, "\n")
 }
 
+// MarkCardReady advances a queued card to ok once the worker has prepared it.
+// Until issue #10 wires LLM generation, the heuristic card written by ingest is
+// the card this transition makes ready.
+func (s *Store) MarkCardReady(ctx context.Context, recordID int64, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE records
+		SET card_status = ?, indexed_at = ?
+		WHERE id = ? AND card_status = ?`,
+		CardStatusOK, formatTime(now), recordID, CardStatusQueued,
+	)
+	if err != nil {
+		return fmt.Errorf("mark record %d card ready: %w", recordID, err)
+	}
+	return nil
+}
+
 // GetRecord returns one full record by id. Missing records return ErrNotFound.
 func (s *Store) GetRecord(ctx context.Context, id int64) (Record, error) {
 	row := s.db.QueryRowContext(ctx, `

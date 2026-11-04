@@ -72,7 +72,9 @@ func serve() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 
-	workerCtx, stopWorkers := context.WithCancel(ctx)
+	// Workers outlive the signal context so in-flight ingests can finish while
+	// the HTTP server drains; they are stopped explicitly after Shutdown.
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	var background sync.WaitGroup
 	defer func() {
 		stopWorkers()

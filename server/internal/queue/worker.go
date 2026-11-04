@@ -123,6 +123,13 @@ func (w *Worker) Run(ctx context.Context) error {
 					return nil
 				}
 				w.logger().Error("process jobs", "error", mask.Text(err.Error()))
+				// A write after processing can fail, leaving the claimed job in
+				// running. Return it to the queue instead of stranding it until
+				// the next process restart.
+				if _, recoverErr := w.Recover(ctx); recoverErr != nil && ctx.Err() == nil {
+					w.logger().Error("recover running jobs", "error", mask.Text(recoverErr.Error()))
+					recovered = false
+				}
 			}
 		}
 
