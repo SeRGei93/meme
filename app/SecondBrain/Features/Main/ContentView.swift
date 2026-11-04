@@ -23,6 +23,18 @@ struct ContentView: View {
                 .padding(.vertical, 6)
                 .background(.quaternary, in: Capsule())
 
+            if let health = appState.health {
+                Text("Версия \(health.version) · схема \(health.schemaVersion)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let errorMessage = appState.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+
             HStack(spacing: 12) {
                 SettingsLink {
                     Text("Settings…")

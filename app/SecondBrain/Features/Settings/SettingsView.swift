@@ -29,8 +29,21 @@ struct SettingsView: View {
 
             Section("Status") {
                 LabeledContent("State", value: appState.statusText)
+                if let serverURL = appState.serverURL {
+                    LabeledContent("Server", value: serverURL.absoluteString)
+                }
+                if let health = appState.health {
+                    LabeledContent("Version", value: health.version)
+                    LabeledContent("Schema", value: String(health.schemaVersion))
+                    LabeledContent("FTS5", value: health.database.fts5 ? "Yes" : "No")
+                }
                 if let lastSync = appState.lastSync {
                     LabeledContent("Last sync", value: lastSync.formatted(date: .abbreviated, time: .standard))
+                }
+                if appState.requiresReauthentication {
+                    Text("Токен недействителен. Нужен новый токен в настройках.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
         }
