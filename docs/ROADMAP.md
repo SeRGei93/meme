@@ -240,40 +240,40 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Плагин `Plugin.define`:
-  - [ ] `setup(ctx)`;
-  - [ ] чтение `~/.config/second-brain/config.json`;
-  - [ ] `spool_dir` по умолчанию `~/.config/second-brain/spool`.
+- [x] Плагин `Plugin.define`:
+  - [x] `setup(ctx)`;
+  - [x] чтение `~/.config/second-brain/config.json`;
+  - [x] `spool_dir` по умолчанию `~/.config/second-brain/spool`.
 - [ ] Backfill:
   - [ ] `ctx.session.list({ directory, limit })`;
   - [ ] пагинация `cursor.next`;
   - [ ] `ctx.session.context(sessionID)`;
   - [ ] `ctx.session.get(sessionID)`;
   - [ ] маркер в `ctx.storage`, чтобы не повторять.
-- [ ] Events:
-  - [ ] `session.idle` + debounce 3–5 минут;
-  - [ ] `session.compaction.started` — сразу;
-  - [ ] `session.execution.failed` — final;
-  - [ ] `session.execution.interrupted` — final.
-- [ ] Normalizer:
-  - [ ] user/assistant текст;
-  - [ ] tool calls: имя, команда, путь;
-  - [ ] удаление reasoning и огромных tool outputs;
-  - [ ] стабильные `message.id`.
-- [ ] Spool writer:
-  - [ ] атомарная запись `*.tmp` → rename;
-  - [ ] имя `timestamp-sessionID-uuid.json`;
-  - [ ] `final` флаг;
-  - [ ] `project_key` из `ctx.location.project` / git.
-- [ ] Cursor/outbox:
-  - [ ] `ctx.storage` для last message/hash;
-  - [ ] при ошибке записи не двигать курсор.
+- [x] Events:
+  - [x] `session.idle` + debounce 3–5 минут;
+  - [x] `session.compaction.started` — сразу;
+  - [x] `session.execution.failed` — final;
+  - [x] `session.execution.interrupted` — final.
+- [x] Normalizer:
+  - [x] user/assistant текст;
+  - [x] tool calls: имя, команда, путь;
+  - [x] удаление reasoning и огромных tool outputs;
+  - [x] стабильные `message.id`.
+- [x] Spool writer:
+  - [x] атомарная запись `*.tmp` → rename;
+  - [x] имя `timestamp-sessionID-uuid.json`;
+  - [x] `final` флаг;
+  - [x] `project_key` из `ctx.location.project` / git.
+- [x] Cursor/outbox:
+  - [x] `ctx.storage` для last message/hash;
+  - [x] при ошибке записи не двигать курсор.
 - [ ] Optional `/remember` command:
   - [ ] `ctx.command.transform`;
   - [ ] отправка текста в `/api/v1/memories`.
-- [ ] Документация установки:
-  - [ ] путь плагина;
-  - [ ] запись в `~/.config/opencode/opencode.json(c)`;
+- [x] Документация установки:
+  - [x] путь плагина;
+  - [x] запись в `~/.config/opencode/opencode.json(c)`;
   - [ ] MCP config.
 
 ### Acceptance criteria

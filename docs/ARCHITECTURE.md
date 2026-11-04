@@ -472,12 +472,17 @@ app/
 
 ```text
 plugin/second-brain/
-  index.ts        # Plugin.define, setup, event subscription
-  capture.ts      # сбор сессии
+  index.ts        # Plugin.define → setupPlugin
+  setup.ts        # wiring: события, compaction hook, ctx адаптеры
+  capture.ts      # сбор сессии, запись бандла, сдвиг курсора
   normalize.ts    # нормализация сообщений
   spool.ts        # атомарная запись
   cursor.ts       # ctx.storage
   config.ts       # чтение ~/.config/second-brain/config.json
+  project.ts      # project_key из git remote / projectID / host
+  events.ts       # idle debounce, compaction, failure
+  types.ts        # spool-бандл и структурные типы OpenCode
+  test/           # node --test, TypeScript без сборки
 ```
 
 ## 6.4 Ключевые контракты
@@ -1078,7 +1083,7 @@ BACKUP_KEEP=20
 
 ```text
 ~/.config/second-brain/
-├── config.json          # URL сервера, настройки
+├── config.json          # URL сервера, настройки плагина и приложения
 ├── mcp_token            # 0600, для OpenCode MCP
 └── spool/               # JSON-бандлы
 ```

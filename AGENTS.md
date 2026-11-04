@@ -20,7 +20,7 @@ Second Brain — центральная память для OpenCode и Jarvis.
 
 - `server/` — Go-сервер: `go.mod`, `cmd/brain`, `internal/`, `Dockerfile`.
 - `app/` — SwiftUI-приложение (появится в M4).
-- `plugin/` — OpenCode plugin (появится в M3).
+- `plugin/` — OpenCode plugin (TypeScript, без сборки; live capture в spool).
 - `tools/` — контрактные тесты, mock API, валидатор spool.
 - `docs/` — архитектура, roadmap, контракты.
 
