@@ -5,7 +5,7 @@ import { createCapture, type WriteBundle } from './capture.ts';
 import { loadConfig, type PluginConfig } from './config.ts';
 import type { StorageLike } from './cursor.ts';
 import { CAPTURE_EVENTS, createEventRouter, type EventLike } from './events.ts';
-import { findGitRemote } from './project.ts';
+import { findGitRemote, resolveProjectKey } from './project.ts';
 import type { SessionInfoLike, SessionMessageLike } from './types.ts';
 
 /** The OpenCode subset this plugin needs; index.ts adapts the real SDK to it. */
@@ -97,6 +97,22 @@ export function logError(error: unknown): void {
 export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {}): Promise<Cleanup> {
   const onError = options.onError ?? logError;
   const config = options.config ?? (await loadConfig());
+  const hostname = options.hostname ?? osHostname();
+  const findRemote = options.findRemote ?? findGitRemote;
+  const rememberProjectKey = async (): Promise<string> => {
+    let remote: string | undefined;
+    try {
+      remote = await findRemote(ctx.location.directory);
+    } catch {
+      remote = undefined;
+    }
+    return resolveProjectKey({
+      remoteUrl: remote,
+      projectID: ctx.location.project.id,
+      directory: ctx.location.directory,
+      hostname,
+    });
+  };
   const capture = createCapture({
     sessions: {
       get: (input) => ctx.session.get(input),
@@ -106,7 +122,7 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
     config,
     directory: ctx.location.directory,
     projectID: ctx.location.project.id,
-    hostname: options.hostname ?? osHostname(),
+    hostname,
     opencodeVersion: ctx.app.version,
     vcs: {
       branch: async (directory) => {
@@ -114,7 +130,7 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
         return info.data.branch.current;
       },
     },
-    findRemote: options.findRemote ?? findGitRemote,
+    findRemote,
     now: options.now,
     uuid: options.uuid,
     write: options.write,
@@ -152,25 +168,6 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
           (error: unknown) => onError(error),
         );
 
-  const synthetic = ctx.session.synthetic?.bind(ctx.session);
-  const commandRegistration = ctx.command
-    ? await ctx.command.transform((editor) => {
-        editor.add({
-          name: 'remember',
-          description: 'Сохранить факт или заметку в Second Brain',
-          execute: (invocation) =>
-            runRememberCommand(invocation, {
-              config,
-              projectKey: `opencode:${ctx.location.project.id}`,
-              readFile: options.remember?.readFile,
-              fetch: options.remember?.fetch,
-              timeoutMs: options.remember?.timeoutMs,
-              say: synthetic ? (input) => synthetic(input) : undefined,
-            }),
-        });
-      })
-    : undefined;
-
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({
@@ -183,6 +180,31 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
       if (!controller.signal.aborted) onError(error);
     }
   })();
+
+  // Optional feature: a broken command registration must never disable capture.
+  const synthetic = ctx.session.synthetic?.bind(ctx.session);
+  let commandRegistration: { dispose(): Promise<void> } | undefined;
+  try {
+    if (ctx.command) {
+      commandRegistration = await ctx.command.transform((editor) => {
+        editor.add({
+          name: 'remember',
+          description: 'Сохранить факт или заметку в Second Brain',
+          execute: (invocation) =>
+            runRememberCommand(invocation, {
+              config,
+              projectKey: rememberProjectKey,
+              readFile: options.remember?.readFile,
+              fetch: options.remember?.fetch,
+              timeoutMs: options.remember?.timeoutMs,
+              say: synthetic ? (input) => synthetic(input) : undefined,
+            }),
+        });
+      });
+    }
+  } catch (error) {
+    onError(error);
+  }
 
   return async () => {
     controller.abort();

@@ -6,11 +6,10 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
 
 export interface RememberDeps {
   readonly config: PluginConfig;
-  /** Stable project key such as `opencode:<projectID>`. */
-  readonly projectKey: string;
+  /** Stable project key, or a resolver using the same rules as capture. */
+  readonly projectKey: string | (() => Promise<string>);
   readonly readFile?: (path: string) => Promise<string>;
   readonly fetch?: FetchLike;
-  readonly now?: () => Date;
   readonly timeoutMs?: number;
 }
 
@@ -41,14 +40,17 @@ interface ErrorEnvelope {
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TEXT_CHARS = 2_000_000;
+/** Opaque bearer token from CONTRACTS.md §4.1: `sb_<kind>_<43 base64url>`. */
+const TOKEN_PATTERN = /^sb_[a-z]+_[A-Za-z0-9_-]{43}$/;
 
 /**
  * Sends one `/remember` text to `POST /api/v1/memories`.
  *
  * Never throws: the command must stay usable with an unreachable server, so
- * every failure becomes a user-facing message. Idempotency is left to the
- * server, which derives `external_id` from the content hash, and `source` is
- * implied by the bearer token.
+ * every failure becomes a user-facing message. `occurred_at` is deliberately
+ * omitted: the server includes it in the content hash, so stamping every call
+ * with "now" would make two identical memories look different and break the
+ * content-hash idempotency. `source` is implied by the bearer token.
  */
 export async function remember(text: string, deps: RememberDeps): Promise<RememberOutcome> {
   const rawText = text.trim();
@@ -67,15 +69,19 @@ export async function remember(text: string, deps: RememberDeps): Promise<Rememb
     };
   }
 
-  let endpoint: URL;
+  let base: URL;
   try {
-    endpoint = new URL('api/v1/memories', serverURL.endsWith('/') ? serverURL : `${serverURL}/`);
+    base = new URL(serverURL);
   } catch {
     return { ok: false, message: 'Некорректный URL сервера в config.json' };
   }
-  if (endpoint.protocol !== 'https:' && !isLoopback(endpoint.hostname)) {
+  if (base.search !== '' || base.hash !== '') {
+    return { ok: false, message: 'URL сервера не должен содержать query или fragment' };
+  }
+  if (base.protocol !== 'https:' && !isLoopback(base.hostname)) {
     return { ok: false, message: 'Сервер должен использовать https (http разрешён только для localhost)' };
   }
+  const endpoint = new URL('api/v1/memories', base.href.endsWith('/') ? base.href : `${base.href}/`);
 
   const readFile = deps.readFile ?? ((path: string) => defaultReadFile(path, 'utf8'));
   let token: string;
@@ -90,11 +96,24 @@ export async function remember(text: string, deps: RememberDeps): Promise<Rememb
       message: 'Нет токена OpenCode. Запустите SecondBrain.app → Settings → «Повернуть токены…»',
     };
   }
+  if (!TOKEN_PATTERN.test(token)) {
+    return {
+      ok: false,
+      message: 'mcp_token повреждён. Запустите SecondBrain.app → Settings → «Повернуть токены…»',
+    };
+  }
 
-  const now = deps.now ?? (() => new Date());
+  let projectKey: string;
+  try {
+    projectKey = typeof deps.projectKey === 'function' ? await deps.projectKey() : deps.projectKey;
+  } catch {
+    return { ok: false, message: 'Не удалось определить проект для записи' };
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let response: Response;
+  let body: unknown;
   try {
     response = await (deps.fetch ?? fetch)(endpoint, {
       method: 'POST',
@@ -103,13 +122,12 @@ export async function remember(text: string, deps: RememberDeps): Promise<Rememb
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: JSON.stringify({
-        raw_text: rawText,
-        project_key: deps.projectKey,
-        occurred_at: now().toISOString(),
-      }),
+      body: JSON.stringify({ raw_text: rawText, project_key: projectKey }),
       signal: controller.signal,
     });
+    // Keep the timer alive while the body is read: a proxy can send headers and
+    // then stall the body forever.
+    body = await readJSON(response);
   } catch (error) {
     if (controller.signal.aborted) {
       return { ok: false, message: 'Сервер недоступен: истекло время ожидания' };
@@ -120,8 +138,20 @@ export async function remember(text: string, deps: RememberDeps): Promise<Rememb
     clearTimeout(timeout);
   }
 
-  const body = await readJSON(response);
+  if (controller.signal.aborted) {
+    return { ok: false, message: 'Сервер недоступен: истекло время ожидания' };
+  }
+
   if (!response.ok) {
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      return {
+        ok: false,
+        message: retryAfter
+          ? `Слишком много запросов, повтор через ${retryAfter} с`
+          : 'Слишком много запросов, попробуйте позже',
+      };
+    }
     if (response.status === 401 || response.status === 403) {
       return {
         ok: false,
@@ -168,8 +198,10 @@ export async function runRememberCommand(
     : `Не удалось запомнить: ${outcome.message}`;
 
   if (!deps.say) {
-    // No message channel (old adapter): surface the failure to OpenCode.
+    // No message channel (old adapter): surface the failure to OpenCode and
+    // keep a success at least in the log.
     if (!outcome.ok) throw new Error(message);
+    console.info(`[second-brain] ${message}`);
     return;
   }
   try {
@@ -196,8 +228,11 @@ function successMessage(outcome: Extract<RememberOutcome, { ok: true }>): string
 }
 
 async function readJSON(response: Response): Promise<unknown> {
+  // `text()` rejects when the fetch signal aborts; only JSON parse errors are
+  // swallowed here so the timeout above stays visible.
+  const text = await response.text();
   try {
-    return await response.json();
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -208,8 +243,12 @@ function describeError(body: unknown): string {
   const envelope = body as ErrorEnvelope;
   const message = envelope.error?.message;
   const code = envelope.error?.code;
-  if (message && code) return `${message} (${code})`;
-  return message ?? code ?? '';
+  const requestID = envelope.error?.request_id;
+  const parts: string[] = [];
+  if (message) parts.push(message);
+  if (code) parts.push(`(${code})`);
+  if (requestID) parts.push(`request_id: ${requestID}`);
+  return parts.join(' ');
 }
 
 function parseMemoryResponse(body: unknown): MemoryResponse | undefined {
@@ -219,7 +258,8 @@ function parseMemoryResponse(body: unknown): MemoryResponse | undefined {
     typeof value.record_id !== 'number' ||
     !Number.isInteger(value.record_id) ||
     value.record_id <= 0 ||
-    (value.job_id !== null && typeof value.job_id !== 'number') ||
+    (value.job_id !== null &&
+      (typeof value.job_id !== 'number' || !Number.isInteger(value.job_id))) ||
     (value.status !== 'indexed' && value.status !== 'queued') ||
     typeof value.replayed !== 'boolean'
   ) {

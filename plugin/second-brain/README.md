@@ -53,13 +53,16 @@ OpenCode) ожидающий `idle`-бандл сбрасывается на д�
 
 - берёт `server_url` из `~/.config/second-brain/config.json` и токен из
   `~/.config/second-brain/mcp_token` (scope `ingest`; его пишет onboarding);
-- вызывает `POST /api/v1/memories` с `raw_text`, `project_key` (`opencode:<projectID>`)
-  и `occurred_at`; `source` сервер выводит из токена, `external_id` — из хеша
-  текста, поэтому повтор не создаёт дубль;
+- вызывает `POST /api/v1/memories` с `raw_text` и `project_key` (те же правила,
+  что у capture: git remote → `opencode:<projectID>` → `local:...`); `source`
+  сервер выводит из токена, `external_id` — из хеша текста. `occurred_at` не
+  передаётся: он входит в content-hash, и отметка времени ломала бы
+  идемпотентность повторной команды;
 - показывает результат synthetic-сообщением в сессии: «Запомнено: запись #N»
   или «Уже в памяти»;
-- ошибки (нет конфига/токена, 401/403, 5xx, сеть) показываются текстом,
-  команда не бросает исключение и не блокирует сессию;
+- ошибки (нет конфига/токена, повреждённый `mcp_token`, 401/403, 429 с
+  `Retry-After`, 5xx с `request_id`, сеть) показываются текстом, команда не
+  бросает исключение и не блокирует сессию;
 - таймаут 5 секунд, затем «Сервер недоступен: истекло время ожидания».
 
 Нормализация: user/assistant текст и tool calls (`name`, `command`, `path`).

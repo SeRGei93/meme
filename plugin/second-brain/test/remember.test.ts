@@ -9,7 +9,7 @@ import {
 } from '../remember.ts';
 
 const SERVER = 'https://brain.example.test';
-const NOW = new Date('2026-11-04T20:00:00Z');
+const TOKEN = `sb_opencode_${'A'.repeat(43)}`;
 
 interface Call {
   readonly url: string;
@@ -39,12 +39,11 @@ function harness(
     ...defaultConfig('/config/second-brain'),
     serverURL: options.serverURL === undefined ? SERVER : (options.serverURL ?? undefined),
   };
-  const token = options.token === undefined ? 'sb_opencode_token' : options.token;
+  const token = options.token === undefined ? TOKEN : options.token;
 
   const deps: RememberCommandDeps = {
     config,
     projectKey: 'opencode:prj_1',
-    now: () => NOW,
     timeoutMs: options.timeoutMs ?? 100,
     readFile: async (path) => {
       if (path.endsWith('/mcp_token')) {
@@ -114,15 +113,35 @@ test('remember posts the memory with the OpenCode token', async () => {
   assert.equal(call.url, `${SERVER}/api/v1/memories`);
   assert.equal(call.init.method, 'POST');
   const headers = new Headers(call.init.headers);
-  assert.equal(headers.get('Authorization'), 'Bearer sb_opencode_token');
+  assert.equal(headers.get('Authorization'), `Bearer ${TOKEN}`);
   assert.equal(headers.get('Content-Type'), 'application/json');
 
   const body = JSON.parse(String(call.init.body));
   assert.deepEqual(body, {
     raw_text: 'Backup bucket is meme',
     project_key: 'opencode:prj_1',
-    occurred_at: NOW.toISOString(),
   });
+});
+
+test('repeating the same text sends an identical body so the server can replay it', async () => {
+  const h = harness({ status: 201, body: { record_id: 1, job_id: null, status: 'indexed', replayed: false } });
+
+  await remember('same fact', h.deps);
+  await remember('same fact', h.deps);
+
+  assert.equal(h.calls.length, 2);
+  assert.equal(String(h.calls[0]?.init.body), String(h.calls[1]?.init.body));
+  const body = JSON.parse(String(h.calls[0]?.init.body));
+  assert.equal(body.occurred_at, undefined, 'occurred_at would break content-hash idempotency');
+});
+
+test('a project key resolver uses the same rules as capture', async () => {
+  const h = harness({ status: 201, body: { record_id: 1, job_id: null, status: 'indexed', replayed: false } });
+
+  await remember('fact', { ...h.deps, projectKey: async () => 'github.com/owner/repo' });
+
+  const body = JSON.parse(String(h.calls[0]?.init.body));
+  assert.equal(body.project_key, 'github.com/owner/repo');
 });
 
 test('remember accepts a queued card and a replayed response', async () => {
@@ -185,6 +204,46 @@ test('server errors include the contract code and message', async () => {
   assert.equal(outcome.ok, false);
   assert.match(!outcome.ok ? outcome.message : '', /503/);
   assert.match(!outcome.ok ? outcome.message : '', /database locked/);
+  assert.match(!outcome.ok ? outcome.message : '', /req_1/);
+});
+
+test('rate limiting includes the retry hint', async () => {
+  const h = harness(
+    { status: 429, body: { error: { code: 'rate_limited', message: 'slow down' } } },
+  );
+  h.calls.length = 0;
+
+  const outcome = await remember('fact', {
+    ...h.deps,
+    fetch: async () =>
+      new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '7' },
+      }),
+  });
+
+  assert.equal(outcome.ok, false);
+  assert.match(!outcome.ok ? outcome.message : '', /7/);
+});
+
+test('a corrupt token points to onboarding instead of blaming the network', async () => {
+  const h = harness({ status: 201 }, { token: 'sb_opencode_broken' });
+
+  const outcome = await remember('fact', h.deps);
+
+  assert.equal(outcome.ok, false);
+  assert.match(!outcome.ok ? outcome.message : '', /повреждён|токен/i);
+  assert.equal(h.calls.length, 0);
+});
+
+test('a server URL with query or fragment is rejected', async () => {
+  const h = harness({ status: 201 }, { serverURL: 'https://brain.example.test?token=leak' });
+
+  const outcome = await remember('fact', h.deps);
+
+  assert.equal(outcome.ok, false);
+  assert.match(!outcome.ok ? outcome.message : '', /query|fragment/i);
+  assert.equal(h.calls.length, 0);
 });
 
 test('a network failure does not throw and is reported', async () => {
@@ -194,6 +253,34 @@ test('a network failure does not throw and is reported', async () => {
 
   assert.equal(outcome.ok, false);
   assert.match(!outcome.ok ? outcome.message : '', /недоступен/i);
+});
+
+test('a stalled response body still times out', async () => {
+  const h = harness({ status: 201 });
+  let aborted = false;
+
+  const outcome = await remember('fact', {
+    ...h.deps,
+    timeoutMs: 10,
+    fetch: async (_input, init) => {
+      aborted = false;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener('abort', () => {
+              aborted = true;
+              controller.error(new DOMException('aborted', 'AbortError'));
+            });
+          },
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      );
+    },
+  });
+
+  assert.equal(outcome.ok, false);
+  assert.match(!outcome.ok ? outcome.message : '', /время|недоступен/i);
+  assert.equal(aborted, true);
 });
 
 test('a slow server times out instead of blocking the session', async () => {
