@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"time"
+
+	"github.com/SeRGei93/meme/server/internal/store"
 )
 
 const statsPath = "/api/v1/stats"
@@ -60,7 +62,11 @@ func (s *server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, statsResponse{
+	writeJSON(w, http.StatusOK, toStatsResponse(stats))
+}
+
+func toStatsResponse(stats store.Stats) statsResponse {
+	return statsResponse{
 		Records: recordStatsResponse{
 			Total: stats.Records.Total,
 			Final: stats.Records.Final,
@@ -76,14 +82,19 @@ func (s *server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 				Failed:    stats.Records.ByCardStatus.Failed,
 			},
 		},
-		Projects:     stats.Projects,
-		Clients:      stats.Clients,
-		Jobs:         jobCountsResponse{Queued: stats.Jobs.Queued, Running: stats.Jobs.Running, Done: stats.Jobs.Done, Failed: stats.Jobs.Failed},
+		Projects: stats.Projects,
+		Clients:  stats.Clients,
+		Jobs: jobCountsResponse{
+			Queued:  stats.Jobs.Queued,
+			Running: stats.Jobs.Running,
+			Done:    stats.Jobs.Done,
+			Failed:  stats.Jobs.Failed,
+		},
 		LastIngestAt: stats.LastIngestAt,
 		Database: databaseStatsResponse{
 			Status:        stats.Database.Status,
 			SchemaVersion: stats.Database.SchemaVersion,
 			SizeBytes:     stats.Database.SizeBytes,
 		},
-	})
+	}
 }

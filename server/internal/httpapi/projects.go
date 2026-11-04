@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/SeRGei93/meme/server/internal/store"
@@ -57,22 +56,4 @@ func (s *server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, projectListResponse{Items: items})
-}
-
-// parseLimitParam reads a bounded integer query parameter that defaults to def
-// when omitted. On failure it writes the contract's invalid_request error.
-func parseLimitParam(w http.ResponseWriter, r *http.Request, name string, def, max int) (int, bool) {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return def, true
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 1 || parsed > max {
-		writeError(w, r, http.StatusBadRequest, "invalid_request",
-			name+" must be an integer between 1 and "+strconv.Itoa(max),
-			map[string]any{"field": name})
-		return 0, false
-	}
-	return parsed, true
 }

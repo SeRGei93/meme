@@ -100,8 +100,11 @@ func parseGraphParams(w http.ResponseWriter, r *http.Request) (store.GraphParams
 	}
 
 	minWeight := 0.0
-	if raw := query.Get("min_weight"); raw != "" {
-		parsed, err := strconv.ParseFloat(raw, 64)
+	if values, present := query["min_weight"]; present {
+		if len(values) != 1 || values[0] == "" {
+			return invalid("min_weight", "min_weight must be a number between 0 and 1")
+		}
+		parsed, err := strconv.ParseFloat(values[0], 64)
 		if err != nil || math.IsNaN(parsed) || parsed < 0 || parsed > 1 {
 			return invalid("min_weight", "min_weight must be a number between 0 and 1")
 		}

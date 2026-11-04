@@ -150,7 +150,7 @@ func TestGetGraphReturnsNodesAndEdgesWithUIScope(t *testing.T) {
 		t.Errorf("anonymous graph status = %d, want 401", rec.Code)
 	}
 
-	for _, query := range []string{"?limit=0", "?limit=501", "?min_weight=-0.1", "?min_weight=1.1", "?min_weight=NaN", "?project_key="} {
+	for _, query := range []string{"?limit=", "?limit=0", "?limit=501", "?min_weight=", "?min_weight=-0.1", "?min_weight=1.1", "?min_weight=NaN", "?project_key="} {
 		if rec := env.do(t, http.MethodGet, "/api/v1/graph"+query, token, nil); rec.Code != http.StatusBadRequest {
 			t.Errorf("graph%s status = %d, want 400 (body %s)", query, rec.Code, rec.Body.String())
 		}
@@ -306,5 +306,9 @@ func TestListProjectsReturnsItemsAndHonorsLimit(t *testing.T) {
 	rec = env.do(t, http.MethodGet, "/api/v1/projects?limit=501", token, nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("limit=501 status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, http.MethodGet, "/api/v1/projects?limit=", token, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty limit status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
 }
