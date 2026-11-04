@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SeRGei93/meme/server/internal/card"
 	"github.com/SeRGei93/meme/server/internal/config"
 	"github.com/SeRGei93/meme/server/internal/finalizer"
 	"github.com/SeRGei93/meme/server/internal/httpapi"
@@ -89,18 +90,15 @@ func serve() error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
+	generator, err := newCardGenerator(cfg, st, logger)
+	if err != nil {
+		return err
+	}
+
 	worker := &queue.Worker{
-		Store:  st,
-		Logger: logger,
-		// Issue #10 replaces this with LLM generation and heuristic fallback.
-		// Until then the heuristic card written by ingest is marked ready, so
-		// completed jobs leave card_status in a terminal state.
-		Processor: queue.ProcessorFunc(func(ctx context.Context, job store.Job) error {
-			if job.RecordID == nil {
-				return nil
-			}
-			return st.MarkCardReady(ctx, *job.RecordID, time.Now().UTC())
-		}),
+		Store:     st,
+		Processor: generator,
+		Logger:    logger,
 	}
 	finalizer := &finalizer.Finalizer{Store: st, Logger: logger}
 
@@ -163,6 +161,31 @@ func serve() error {
 	background.Wait()
 	logger.Info("server stopped")
 	return nil
+}
+
+func newCardGenerator(cfg config.Config, st *store.Store, logger *slog.Logger) (queue.Processor, error) {
+	generator := &card.Generator{
+		Store:         st,
+		Model:         cfg.LLM.Model,
+		MaxInputChars: cfg.LLM.MaxInputChars,
+		Logger:        logger,
+	}
+	if !cfg.LLM.Enabled() {
+		logger.Warn("card generation disabled: BRAIN_LLM_BASE_URL and BRAIN_LLM_MODEL are not set")
+		return generator, nil
+	}
+
+	client, err := card.NewOpenAIClient(card.OpenAIOptions{
+		BaseURL: cfg.LLM.BaseURL,
+		APIKey:  cfg.LLM.APIKey,
+		Model:   cfg.LLM.Model,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure card generator: %w", err)
+	}
+	generator.Client = client
+	logger.Info("card generation enabled", "model", cfg.LLM.Model)
+	return generator, nil
 }
 
 func healthcheck() error {

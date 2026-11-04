@@ -200,12 +200,18 @@ func (s *Store) finishAttempt(ctx context.Context, id int64, status JobStatus, a
 	}
 
 	if status == JobFailed {
+		// Only fail the card when the job still belongs to the record's current
+		// final version. A leftover job for an older version must not mark the
+		// newer version's queued card as failed.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE records
 			SET card_status = ?
 			WHERE card_status = ?
-			  AND id = (SELECT record_id FROM ingest_jobs WHERE id = ? AND kind = 'ingest')`,
-			CardStatusFailed, CardStatusQueued, id,
+			  AND id = (SELECT record_id FROM ingest_jobs WHERE id = ? AND kind = 'ingest')
+			  AND COALESCE(finalized_at, '') = (
+				SELECT created_at FROM ingest_jobs WHERE id = ? AND kind = 'ingest'
+			  )`,
+			CardStatusFailed, CardStatusQueued, id, id,
 		); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("fail card for job %d: %w", id, err)

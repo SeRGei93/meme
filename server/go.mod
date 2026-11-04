@@ -2,7 +2,10 @@ module github.com/SeRGei93/meme/server
 
 go 1.26.0
 
-require modernc.org/sqlite v1.61.1
+require (
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	modernc.org/sqlite v1.61.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
