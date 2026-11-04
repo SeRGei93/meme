@@ -1,13 +1,13 @@
-import { Plugin } from '@opencode/plugin';
 import { setupPlugin, type SetupContext } from './setup.ts';
 
 export const PLUGIN_ID = 'second-brain.capture';
 
 /**
- * Thin OpenCode entrypoint: the SDK's branded types are adapted once here, and
- * all behaviour lives in setup.ts so it can be tested with a fake context.
+ * Thin OpenCode entrypoint. `Plugin.define` is an identity helper, but importing
+ * it would make the installed plugin depend on `node_modules`; a plain object
+ * keeps `~/.config/opencode/plugins/second-brain/` self-contained.
  */
-export default Plugin.define({
+export default {
   id: PLUGIN_ID,
-  setup: (ctx) => setupPlugin(ctx as unknown as SetupContext),
-});
+  setup: (ctx: unknown) => setupPlugin(ctx as SetupContext),
+};

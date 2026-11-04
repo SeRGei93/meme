@@ -53,9 +53,14 @@ menu bar или кнопку Quit.
   `SearchResponse`, `Project`, `Stats`, произвольный `JSONValue`);
 - `APIError` — разбор `ErrorEnvelope`, флаги `isRetryable` и
   `requiresReauthentication` для `401/403`;
-- `KeychainStore` — bearer-токены в Keychain по аккаунтам `admin`, `ui`, `mcp`;
+- `KeychainStore` — bearer-токены в Keychain по аккаунтам `opencode`, `jarvis`,
+  `ui`;
 - `ConfigStore` — атомарная запись `~/.config/second-brain/config.json`
   (каталог `0700`, файл `0600`, ключи snake_case, общие с плагином);
+- `PluginInstaller` — копирование встроенного плагина в
+  `~/.config/opencode/plugins/second-brain/`, статус и атомарная переустановка;
+- `OpenCodeConfig` — разбор JSON/JSONC и merge `mcp.servers.second-brain` в
+  глобальный `opencode.json(c)` без потери чужих настроек;
 - `AppState` — `@Observable`-состояние подключения, ошибок и «нужен новый токен».
 
 `AppState.checkHealth(using:)` не требует токена; `loadStats(using:)` проверяет,
@@ -75,14 +80,49 @@ bootstrap admin token (`BRAIN_ADMIN_TOKEN`). По кнопке Connect оно:
 3. проверяет выданный `ui`-токен через `GET /api/v1/stats`;
 4. сохраняет токены в Keychain, пишет `config.json` (merge с настройками
    плагина, в `app_clients` запоминаются id) и `mcp_token` (`0600`);
-5. только после этого отзывает клиентов, созданных этим приложением ранее.
+5. только после этого отзывает клиентов, созданных этим приложением ранее;
+6. best-effort ставит OpenCode plugin и прописывает MCP-сервер. Ошибка прав или
+   повреждённый `opencode.json` не отменяет подключение — она видна в Settings
+   и в главном окне.
 
 При сбое на любом шаге Keychain, `config.json` и `mcp_token` восстанавливаются,
 а новые клиенты отзываются. Если не удалось отозвать старого клиента, его id
 попадает в `pending_revocations` и повторяется при следующем запуске.
 
 Admin token не сохраняется. Повторный запуск сразу подключается; Settings →
-Connection → «Повернуть токены…» открывает форму снова и ротирует все три клиента.
+Tokens → «Повернуть токены…» открывает форму снова и ротирует все три клиента.
+
+## OpenCode plugin и Settings
+
+Приложение — единственный установщик локальной части:
+
+- плагин лежит внутри `.app` (`Contents/Resources/SecondBrainPlugin`) и
+  копируется в `~/.config/opencode/plugins/second-brain/`;
+- глобальные плагины OpenCode находит автоматически; `plugins` в конфиге не
+  нужен, если используется стандартный путь;
+- установка атомарная: новый каталог готовится рядом и подменяет старый только
+  после успешного копирования. Повторная установка перезаписывает файлы и не
+  трогает другие плагины;
+- статус сравнивает содержимое установленных файлов с bundle: «Установлен»,
+  «Не установлен», «Нужно обновить», «Ошибка»;
+- MCP-сервер пишется в `~/.config/opencode/opencode.json` (или существующий
+  `.jsonc`) как `mcp.servers.second-brain` с `type: remote`, `oauth: false`,
+  `codemode: false` и заголовком
+  `Authorization: Bearer {file:~/.config/second-brain/mcp_token}`. Токен в файл
+  не попадает. Чужие ключи и серверы сохраняются. JSONC с комментариями
+  читается; если файл нужно переписать, комментарии и форматирование
+  нормализуются в валидный JSON. Уже корректный файл не перезаписывается.
+
+Settings показывает и меняет:
+
+- server URL (с проверкой `/health` и обновлением MCP);
+- наличие токенов и кнопку ротации;
+- spool path (создаётся с `0700`) и launch at login;
+- статус плагина, статус MCP и кнопку установки/переустановки.
+
+Для UI-тестов и нестандартных установок доступны переменные окружения
+`SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode) и `SECOND_BRAIN_PLUGIN_SOURCE`
+(каталог с файлами плагина).
 
 ## Подпись и sandbox
 

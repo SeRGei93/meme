@@ -325,8 +325,8 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] создание/ротация токенов `opencode`, `jarvis`, `ui`;
   - [x] запись `~/.config/second-brain/config.json`;
   - [x] запись `mcp_token` с `0600`;
-  - [ ] установка OpenCode plugin;
-  - [ ] правка/подсказка MCP config;
+  - [x] установка OpenCode plugin;
+  - [x] правка/подсказка MCP config;
   - [x] проверка подключения.
 - [x] Launch at login:
   - [x] `SMAppService.mainApp`.
@@ -418,12 +418,12 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] узлы/связи;
   - [ ] фильтры;
   - [ ] клик → карточка.
-- [ ] Settings:
-  - [ ] server URL;
-  - [ ] токены;
-  - [ ] launch at login;
-  - [ ] spool path;
-  - [ ] reinstall plugin.
+- [x] Settings:
+  - [x] server URL;
+  - [x] токены;
+  - [x] launch at login;
+  - [x] spool path;
+  - [x] reinstall plugin.
 - [ ] Menu bar:
   - [ ] статус;
   - [ ] быстрый поиск;

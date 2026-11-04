@@ -31,21 +31,40 @@ final class AppState {
     var onboardingBusy = false
     var onboardingError: String?
 
+    // MARK: OpenCode integration
+
+    var pluginStatus: PluginInstallStatus?
+    var mcpStatus: OpenCodeConfigStatus?
+    /// Keychain account → whether a token is present.
+    var tokenPresence: [String: Bool] = [:]
+    var settingsNotice: String?
+    var settingsError: String?
+    var integrationBusy = false
+
     private let configStore: ConfigStore
     private let keychain: KeychainStore
     private let mcpTokenFile: MCPTokenFile
     private let session: URLSession
+    private let openCodeConfig: OpenCodeConfig
+    private let pluginInstaller: PluginInstaller
     private var didBootstrap = false
 
     init(
         configStore: ConfigStore = ConfigStore(),
         keychain: KeychainStore = KeychainStore(),
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        openCodeDirectory: URL = OpenCodePaths.defaultDirectory(),
+        pluginSourceDirectory: URL? = PluginInstaller.defaultSourceDirectory()
     ) {
         self.configStore = configStore
         self.keychain = keychain
         mcpTokenFile = MCPTokenFile(directory: configStore.directory)
         self.session = session
+        openCodeConfig = OpenCodeConfig(directory: openCodeDirectory)
+        pluginInstaller = PluginInstaller(
+            openCodeDirectory: openCodeDirectory,
+            sourceDirectory: pluginSourceDirectory
+        )
     }
 
     // MARK: Lifecycle
@@ -56,6 +75,10 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
+        let stored = try? configStore.load()
+        serverURL = stored?.serverURL
+        refreshIntegrationStatus()
+
         #if DEBUG
         // UI tests need a deterministic window without onboarding.
         if ProcessInfo.processInfo.environment["SECOND_BRAIN_SKIP_ONBOARDING"] == "1" {
@@ -64,9 +87,6 @@ final class AppState {
             return
         }
         #endif
-
-        let stored = try? configStore.load()
-        serverURL = stored?.serverURL
 
         guard let url = stored?.serverURL,
               let token = try? keychain.value(for: KeychainStore.Account.ui) else {
@@ -121,6 +141,9 @@ final class AppState {
             if let token = try? keychain.value(for: KeychainStore.Account.ui) {
                 await loadStats(using: APIClient(baseURL: url, token: token, session: session))
             }
+            // Installing the plugin is best effort: a permissions problem must
+            // not undo a successful token rotation. Settings shows the result.
+            installOpenCodeIntegration()
             return true
         } catch {
             onboardingError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -133,6 +156,204 @@ final class AppState {
     func presentOnboardingForRotation() {
         onboardingError = nil
         isOnboardingPresented = true
+    }
+
+    // MARK: OpenCode integration
+
+    /// Effective spool path shown in Settings: the value from `config.json`, or
+    /// the plugin default when the key is absent.
+    var spoolPathText: String {
+        if let config = try? configStore.load(),
+           let configured = config.spoolDir,
+           !configured.isEmpty {
+            return configured
+        }
+        return configStore.directory.appendingPathComponent("spool", isDirectory: true).path
+    }
+
+    /// One-line state for the main window and the menu bar.
+    var integrationSummary: String {
+        guard let pluginStatus else {
+            return "OpenCode: статус неизвестен"
+        }
+        switch pluginStatus.state {
+        case .installed:
+            switch mcpStatus?.state {
+            case .configured:
+                return mcpTokenAvailable
+                    ? "OpenCode: плагин и MCP готовы"
+                    : "OpenCode: плагин и MCP настроены, но mcp_token отсутствует"
+            case .error(let message):
+                return "OpenCode: MCP настроен с ошибкой — \(message)"
+            case .notConfigured, .none:
+                return "OpenCode: плагин установлен, MCP не настроен"
+            }
+        case .notInstalled:
+            return "OpenCode: плагин не установлен"
+        case .outdated:
+            return "OpenCode: плагин нужно обновить"
+        case .error(let message):
+            return "OpenCode: \(message)"
+        }
+    }
+
+    /// Cached at refresh time so `integrationSummary` does not read the token
+    /// file on every SwiftUI render.
+    private(set) var mcpTokenAvailable = false
+
+    /// Re-reads plugin, MCP and Keychain state without changing anything.
+    func refreshIntegrationStatus() {
+        pluginStatus = pluginInstaller.status()
+        mcpStatus = openCodeConfig.status(
+            serverURL: effectiveServerURL,
+            tokenPath: tokenPathForMCP
+        )
+        if let token = (try? mcpTokenFile.read()) ?? nil {
+            mcpTokenAvailable = !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } else {
+            mcpTokenAvailable = false
+        }
+        var presence: [String: Bool] = [:]
+        for account in KeychainStore.Account.all {
+            presence[account] = (try? keychain.value(for: account)) != nil
+        }
+        tokenPresence = presence
+    }
+
+    /// Installs (or reinstalls) the plugin and rewrites the MCP entry. A failure
+    /// is reported through `settingsError` and never throws into SwiftUI.
+    @discardableResult
+    func installOpenCodeIntegration() -> Bool {
+        guard !integrationBusy else { return false }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        settingsError = nil
+        settingsNotice = nil
+
+        do {
+            pluginStatus = try pluginInstaller.install()
+
+            if let effectiveServerURL {
+                serverURL = effectiveServerURL
+                try configureMCP(serverURL: effectiveServerURL)
+                settingsNotice = "Плагин OpenCode установлен, MCP config настроен"
+            } else {
+                settingsNotice = "Плагин OpenCode установлен. MCP config появится после указания URL сервера"
+            }
+            refreshIntegrationStatus()
+            return true
+        } catch {
+            settingsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            refreshIntegrationStatus()
+            return false
+        }
+    }
+
+    /// Saves a new server URL, rewrites the MCP entry and verifies the server.
+    /// Tokens are left untouched: if the new server rejects them, the UI asks
+    /// for a rotation instead of silently deleting credentials.
+    @discardableResult
+    func updateServerURL(_ raw: String) async -> Bool {
+        settingsError = nil
+        settingsNotice = nil
+
+        let url: URL
+        do {
+            url = try OnboardingService.validateServerURL(raw)
+        } catch {
+            settingsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+
+        do {
+            var config = try configStore.load() ?? AppConfig()
+            config.serverURL = url
+            try configStore.save(config)
+            serverURL = url
+        } catch {
+            settingsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+
+        do {
+            try configureMCP(serverURL: url)
+            settingsNotice = "URL сохранён, MCP config обновлён"
+        } catch {
+            settingsError = "URL сохранён, но MCP config не обновлён: "
+                + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+
+        await checkHealth(using: APIClient(baseURL: url, session: session))
+        if let token = try? keychain.value(for: KeychainStore.Account.ui) {
+            await loadStats(using: APIClient(baseURL: url, token: token, session: session))
+        }
+        refreshIntegrationStatus()
+        return true
+    }
+
+    /// Saves the spool directory and creates it when missing. A relative path is
+    /// rejected because the watcher and the plugin would resolve it differently.
+    @discardableResult
+    func updateSpoolPath(_ raw: String) -> Bool {
+        settingsError = nil
+        settingsNotice = nil
+
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else {
+            settingsError = "Укажите абсолютный путь к spool (например, ~/.config/second-brain/spool)"
+            return false
+        }
+
+        let directory = URL(fileURLWithPath: expanded, isDirectory: true)
+        do {
+            try ensureDirectory(directory)
+            var config = try configStore.load() ?? AppConfig()
+            config.spoolDir = directory.path
+            try configStore.save(config)
+        } catch {
+            settingsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+
+        settingsNotice = "Путь Spool сохранён"
+        return true
+    }
+
+    private var tokenPathForMCP: String {
+        OpenCodePaths.tildePath(for: mcpTokenFile.fileURL)
+    }
+
+    /// `serverURL` is loaded by `bootstrap`, but Settings can run before it on a
+    /// UI-test launch. Fall back to the shared config so installing the MCP
+    /// entry does not depend on the order of calls.
+    private var effectiveServerURL: URL? {
+        serverURL ?? (try? configStore.load())?.serverURL
+    }
+
+    private func configureMCP(serverURL: URL) throws {
+        try openCodeConfig.configure(serverURL: serverURL, tokenPath: tokenPathForMCP)
+    }
+
+    private func ensureDirectory(_ directory: URL) throws {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                throw NSError(
+                    domain: "SecondBrain.Settings",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Путь занят файлом: \(directory.path)"]
+                )
+            }
+            return
+        }
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
 
     // MARK: Status
