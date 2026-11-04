@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/search"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
@@ -112,7 +113,7 @@ func parseSearchParams(w http.ResponseWriter, r *http.Request) (store.SearchPara
 	if query.Has("source") && source == "" {
 		return invalid("source", "source must be opencode or jarvis")
 	}
-	if source != "" && source != "opencode" && source != "jarvis" {
+	if source != "" && !auth.ValidSource(source) {
 		return invalid("source", "source must be opencode or jarvis")
 	}
 

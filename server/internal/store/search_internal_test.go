@@ -195,6 +195,43 @@ func TestSearchMatchesRussianWordForms(t *testing.T) {
 	}
 }
 
+func TestSearchMatchesRussianAdjectiveAndParticipleForms(t *testing.T) {
+	st, clientID := openSearchStore(t)
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+
+	seedSearchNoise(t, st, clientID, 10, now)
+	newID := seedSearchRecord(t, st, clientID, searchFixture{
+		ExternalID: "new-project",
+		Title:      "Новый проект",
+		UpdatedAt:  now,
+	})
+	dataID := seedSearchRecord(t, st, clientID, searchFixture{
+		ExternalID: "project-data",
+		Title:      "Данные проекта",
+		UpdatedAt:  now,
+	})
+
+	tests := []struct {
+		query string
+		want  int64
+	}{
+		{"новым", newID},
+		{"данным", dataID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result, err := st.Search(context.Background(), SearchParams{Query: tt.query, Limit: 8, Now: now})
+			if err != nil {
+				t.Fatalf("Search(%q) error = %v", tt.query, err)
+			}
+			if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != tt.want {
+				t.Errorf("Search(%q) returned %+v (total %d), want only record %d",
+					tt.query, result.Items, result.Total, tt.want)
+			}
+		})
+	}
+}
+
 func TestSearchHonorsQuotedPhrase(t *testing.T) {
 	st, clientID := openSearchStore(t)
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -210,12 +247,34 @@ func TestSearchHonorsQuotedPhrase(t *testing.T) {
 		UpdatedAt:  now,
 	})
 
-	result, err := st.Search(context.Background(), SearchParams{Query: `"база данных"`, Limit: 8, Now: now})
-	if err != nil {
-		t.Fatalf("Search() error = %v", err)
+	tests := []struct {
+		query string
+		want  int64
+		total int
+	}{
+		{query: `"база данных"`, want: dataID, total: 1},
+		{query: `SQLite "база данных"`, want: dataID, total: 1},
+		{query: `SQLite "данных база"`, total: 0},
 	}
-	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != dataID {
-		t.Errorf("quoted phrase matches = %+v (total %d), want only record %d", result.Items, result.Total, dataID)
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result, err := st.Search(context.Background(), SearchParams{Query: tt.query, Limit: 8, Now: now})
+			if err != nil {
+				t.Fatalf("Search(%q) error = %v", tt.query, err)
+			}
+			if result.Total != tt.total {
+				t.Errorf("Search(%q) total = %d, want %d", tt.query, result.Total, tt.total)
+			}
+			if tt.total == 0 {
+				if len(result.Items) != 0 {
+					t.Errorf("Search(%q) items = %+v, want none", tt.query, result.Items)
+				}
+				return
+			}
+			if len(result.Items) != 1 || result.Items[0].ID != tt.want {
+				t.Errorf("Search(%q) items = %+v, want only record %d", tt.query, result.Items, tt.want)
+			}
+		})
 	}
 }
 
@@ -435,32 +494,64 @@ func TestSearchRanksByWeightedBM25(t *testing.T) {
 	if result.Total != 6 {
 		t.Errorf("Total = %d, want 6", result.Total)
 	}
+	if len(result.Items) != 6 {
+		t.Fatalf("len(Items) = %d, want 6", len(result.Items))
+	}
 
-	want := []int64{
-		ids["title"],
-		ids["keywords"],
-		ids["questions"],
-		ids["summary"],
-		ids["atoms"],
-		ids["raw_text"],
+	// summary and questions share weight 4, so their order is a tie-break, not
+	// a ranking signal. The other columns have distinct weights and must rank
+	// strictly: title (6) > keywords (5) > summary/questions (4) > atoms (3) >
+	// raw_text (1).
+	byID := make(map[int64]SearchHit, len(result.Items))
+	position := make(map[int64]int, len(result.Items))
+	for i, hit := range result.Items {
+		byID[hit.ID] = hit
+		position[hit.ID] = i
+		if hit.Score <= 0 {
+			t.Errorf("score of %s = %v, want > 0", hit.Title, hit.Score)
+		}
 	}
-	if len(result.Items) != len(want) {
-		t.Fatalf("len(Items) = %d, want %d", len(result.Items), len(want))
+	score := func(column string) float64 {
+		hit, ok := byID[ids[column]]
+		if !ok {
+			t.Fatalf("result is missing the %s hit", column)
+		}
+		return hit.Score
 	}
-	for i, wantID := range want {
-		if result.Items[i].ID != wantID {
-			got := make([]int64, len(result.Items))
-			for j := range result.Items {
-				got[j] = result.Items[j].ID
-			}
-			t.Fatalf("ranked ids = %v, want %v", got, want)
+	pos := func(column string) int {
+		index, ok := position[ids[column]]
+		if !ok {
+			t.Fatalf("result is missing the %s hit", column)
 		}
-		if result.Items[i].Score <= 0 {
-			t.Errorf("score of %s = %v, want > 0", result.Items[i].Title, result.Items[i].Score)
-		}
-		if i > 0 && result.Items[i].Score > result.Items[i-1].Score {
-			t.Errorf("scores are not descending: %v then %v", result.Items[i-1].Score, result.Items[i].Score)
-		}
+		return index
+	}
+
+	if pos("title") >= pos("keywords") || pos("keywords") >= min(pos("summary"), pos("questions")) {
+		t.Errorf("ranked ids = %v, want title before keywords before summary/questions", result.Items)
+	}
+	if max(pos("summary"), pos("questions")) >= pos("atoms") || pos("atoms") >= pos("raw_text") {
+		t.Errorf("ranked ids = %v, want summary/questions before atoms before raw_text", result.Items)
+	}
+
+	if score("title") <= score("keywords") {
+		t.Errorf("title score %v <= keywords score %v, want title weight 6 above keywords 5",
+			score("title"), score("keywords"))
+	}
+	if score("keywords") <= score("summary") {
+		t.Errorf("keywords score %v <= summary score %v, want keywords weight 5 above summary 4",
+			score("keywords"), score("summary"))
+	}
+	if score("summary") <= score("atoms") {
+		t.Errorf("summary score %v <= atoms score %v, want summary weight 4 above atoms 3",
+			score("summary"), score("atoms"))
+	}
+	if score("atoms") <= score("raw_text") {
+		t.Errorf("atoms score %v <= raw_text score %v, want atoms weight 3 above raw_text 1",
+			score("atoms"), score("raw_text"))
+	}
+	if diff := score("summary") - score("questions"); diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("summary and questions scores differ (%v vs %v), want equal weight 4",
+			score("summary"), score("questions"))
 	}
 }
 

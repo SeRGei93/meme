@@ -23,6 +23,19 @@ const (
 
 var allKinds = []Kind{KindOpenCode, KindJarvis, KindUI, KindAdmin}
 
+// Knowledge sources recorded on records. They are derived from the client kind
+// and never accepted from a request body.
+const (
+	SourceOpenCode = "opencode"
+	SourceJarvis   = "jarvis"
+)
+
+// ValidSource reports whether the value is a knowledge source defined by the
+// v1 contract.
+func ValidSource(source string) bool {
+	return source == SourceOpenCode || source == SourceJarvis
+}
+
 // Scope is a token permission from the v1 contract.
 type Scope string
 
@@ -69,9 +82,9 @@ func (k Kind) Valid() bool {
 func (k Kind) Source() (string, bool) {
 	switch k {
 	case KindOpenCode:
-		return "opencode", true
+		return SourceOpenCode, true
 	case KindJarvis:
-		return "jarvis", true
+		return SourceJarvis, true
 	default:
 		return "", false
 	}

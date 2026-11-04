@@ -13,14 +13,18 @@ func TestMatchQuery(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"latin prefix", "SQLite", `"sqlite"*`},
+		{"latin stays exact", "SQLite", `"sqlite"`},
 		{"multiple terms", "база данных", `"баз"* "данн"*`},
 		{"russian noun ending", "Миграцией", `"миграц"*`},
+		{"russian adjective ending", "новым", `"нов"*`},
+		{"russian participle ending", "данным", `"данн"*`},
 		{"short root keeps soft stem", "музей", `"музе"*`},
 		{"short adjective keeps root", "новый", `"нов"*`},
 		{"single quoted phrase", `"база данных"`, `"база данных"`},
-		{"two quoted terms are not one phrase", `"база" "данных"`, `"баз"* "данн"*`},
-		{"punctuation is tokenized", "C++", `"c"*`},
+		{"two quoted terms are two phrases", `"база" "данных"`, `"база" "данных"`},
+		{"mixed phrase keeps its words together", `sqlite "fix ordering"`, `"sqlite" "fix ordering"`},
+		{"unbalanced quote falls back to terms", `sqlite "fix ordering`, `"sqlite" "fix" "ordering"`},
+		{"punctuation is tokenized", "C++", `"c"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
