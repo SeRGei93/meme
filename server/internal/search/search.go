@@ -9,6 +9,7 @@ import (
 	"unicode"
 )
 
+// ErrEmptyQuery is returned when a query contains no letters or digits.
 var ErrEmptyQuery = errors.New("query has no searchable terms")
 
 const (
@@ -23,44 +24,78 @@ const (
 	FreshnessHalfLifeDays = 120.0
 )
 
-// MatchQuery normalizes a user query into FTS5 syntax. Tokens are lower-cased,
-// quoted and used as prefixes; Russian tokens are shortened to a stem so word
-// forms match ("миграцией" finds "миграции"). A query that is exactly one
-// double-quoted phrase is matched as an exact phrase instead.
+// MatchQuery normalizes a user query into FTS5 syntax. Latin tokens are matched
+// exactly, while Russian tokens are shortened to a stem and used as prefixes so
+// word forms match ("миграцией" finds "миграции"). Text inside double quotes is
+// kept as an exact phrase, so `sqlite "fix ordering"` requires the two words
+// together; quoting intentionally turns stemming off. An unbalanced quote
+// degrades to ordinary terms instead of dropping the query.
 func MatchQuery(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", ErrEmptyQuery
-	}
-
-	if isSinglePhrase(trimmed) {
-		tokens := queryTokens(trimmed[1 : len(trimmed)-1])
+	parts := splitQuery(strings.TrimSpace(raw))
+	terms := make([]string, 0, len(parts))
+	for _, part := range parts {
+		tokens := queryTokens(part.text)
 		if len(tokens) == 0 {
-			return "", ErrEmptyQuery
+			continue
 		}
-		return `"` + strings.Join(tokens, " ") + `"`, nil
+		if part.phrase {
+			terms = append(terms, `"`+strings.Join(tokens, " ")+`"`)
+			continue
+		}
+		for _, token := range tokens {
+			if hasCyrillic(token) {
+				terms = append(terms, `"`+russianStem(token)+`"*`)
+				continue
+			}
+			terms = append(terms, `"`+token+`"`)
+		}
 	}
-
-	tokens := queryTokens(trimmed)
-	if len(tokens) == 0 {
+	if len(terms) == 0 {
 		return "", ErrEmptyQuery
-	}
-
-	terms := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		if hasCyrillic(token) {
-			token = russianStem(token)
-		}
-		terms = append(terms, `"`+token+`"*`)
 	}
 	return strings.Join(terms, " "), nil
 }
 
-func isSinglePhrase(value string) bool {
-	return len(value) >= 2 &&
-		strings.HasPrefix(value, `"`) &&
-		strings.HasSuffix(value, `"`) &&
-		strings.Count(value, `"`) == 2
+type queryPart struct {
+	text   string
+	phrase bool
+}
+
+// splitQuery separates quoted phrases from ordinary terms. On an unbalanced
+// quote it returns the whole input as plain text so the caller still searches
+// every word.
+func splitQuery(raw string) []queryPart {
+	var (
+		parts   []queryPart
+		current strings.Builder
+		quoted  bool
+	)
+	for _, r := range raw {
+		if r != '"' {
+			current.WriteRune(r)
+			continue
+		}
+		if quoted {
+			if strings.TrimSpace(current.String()) != "" {
+				parts = append(parts, queryPart{text: current.String(), phrase: true})
+			}
+			current.Reset()
+			quoted = false
+			continue
+		}
+		if strings.TrimSpace(current.String()) != "" {
+			parts = append(parts, queryPart{text: current.String()})
+		}
+		current.Reset()
+		quoted = true
+	}
+	if quoted {
+		return []queryPart{{text: raw}}
+	}
+	if strings.TrimSpace(current.String()) != "" {
+		parts = append(parts, queryPart{text: current.String()})
+	}
+	return parts
 }
 
 func queryTokens(value string) []string {
@@ -84,7 +119,7 @@ func hasCyrillic(value string) bool {
 var russianSuffixes = []string{
 	"иями", "ями", "ами", "ого", "его", "ому", "ему", "ыми", "ими",
 	"ией", "ья", "ая", "яя", "ое", "ее", "ые", "ие", "ый", "ий", "ой", "ей",
-	"ую", "юю", "ых", "их", "ов", "ев", "ам", "ям", "ах", "ях",
+	"ую", "юю", "ых", "их", "ым", "им", "ов", "ев", "ам", "ям", "ах", "ях",
 	"ии", "ия", "ию", "ем", "ом",
 	"а", "я", "ы", "и", "е", "о", "у", "ю", "ь",
 }
