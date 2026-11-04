@@ -1,0 +1,79 @@
+name: SecondBrain
+options:
+  bundleIdPrefix: com.serg
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+    COMBINE_HIDPI_IMAGES: YES
+targets:
+  SecondBrain:
+    type: application
+    platform: macOS
+    sources:
+      - path: SecondBrain
+        excludes:
+          - Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.serg.secondbrain
+        PRODUCT_NAME: SecondBrain
+        INFOPLIST_FILE: SecondBrain/Resources/Info.plist
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_ENTITLEMENTS: ""
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+  SecondBrainTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SecondBrainTests
+    dependencies:
+      - target: SecondBrain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.serg.secondbrain.tests
+        GENERATE_INFOPLIST_FILE: YES
+  SecondBrainUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: SecondBrainUITests
+    dependencies:
+      - target: SecondBrain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.serg.secondbrain.uitests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  SecondBrain:
+    build:
+      targets:
+        SecondBrain: all
+        SecondBrainTests: [test]
+        SecondBrainUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: SecondBrainTests
+          parallelizable: true
+        - name: SecondBrainUITests
+          parallelizable: false
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
