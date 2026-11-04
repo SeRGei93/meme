@@ -2,6 +2,7 @@ import AppKit
 import XCTest
 @testable import SecondBrain
 
+@MainActor
 final class SecondBrainTests: XCTestCase {
     func testAppStateStartsReady() {
         let state = AppState()

@@ -311,13 +311,13 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] `MenuBarExtra`;
   - [x] закрытие окна не завершает приложение;
   - [x] `Settings` scene.
-- [ ] Core:
-  - [ ] `APIClient` на `URLSession` + async/await;
-  - [ ] `Codable` модели;
-  - [ ] `KeychainStore`;
-  - [ ] `ConfigStore`;
-  - [ ] `AppState` `@Observable`;
-  - [ ] обработка ошибок и `401`.
+- [x] Core:
+  - [x] `APIClient` на `URLSession` + async/await;
+  - [x] `Codable` модели;
+  - [x] `KeychainStore`;
+  - [x] `ConfigStore`;
+  - [x] `AppState` `@Observable`;
+  - [x] обработка ошибок и `401`.
 - [ ] Onboarding:
   - [ ] ввод server URL;
   - [ ] ввод admin token;
@@ -330,7 +330,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] проверка подключения.
 - [x] Launch at login:
   - [x] `SMAppService.mainApp`.
-- [ ] Базовые unit-тесты API client и Keychain.
+- [x] Базовые unit-тесты API client и Keychain.
 
 ### Acceptance criteria
 
