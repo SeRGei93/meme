@@ -61,11 +61,8 @@ func Validate(raw []byte) (ingest.Card, error) {
 	}
 
 	card := ingest.Card{
-		Title:     strings.TrimSpace(payload.Title),
-		Summary:   strings.TrimSpace(payload.Summary),
-		Questions: normalizeList(payload.Questions),
-		Keywords:  normalizeList(payload.Keywords),
-		Atoms:     normalizeList(payload.Atoms),
+		Title:   strings.TrimSpace(payload.Title),
+		Summary: strings.TrimSpace(payload.Summary),
 	}
 	if card.Title == "" {
 		return ingest.Card{}, fmt.Errorf("card title must not be blank")
@@ -73,14 +70,15 @@ func Validate(raw []byte) (ingest.Card, error) {
 	if card.Summary == "" {
 		return ingest.Card{}, fmt.Errorf("card summary must not be blank")
 	}
-	if len(card.Questions) != len(payload.Questions) {
-		return ingest.Card{}, fmt.Errorf("card questions must not contain blank items")
+
+	if card.Questions, err = normalizeList("questions", payload.Questions); err != nil {
+		return ingest.Card{}, err
 	}
-	if len(card.Keywords) != len(payload.Keywords) {
-		return ingest.Card{}, fmt.Errorf("card keywords must not contain blank items")
+	if card.Keywords, err = normalizeList("keywords", payload.Keywords); err != nil {
+		return ingest.Card{}, err
 	}
-	if len(card.Atoms) != len(payload.Atoms) {
-		return ingest.Card{}, fmt.Errorf("card atoms must not contain blank items")
+	if card.Atoms, err = normalizeList("atoms", payload.Atoms); err != nil {
+		return ingest.Card{}, err
 	}
 	return card, nil
 }
@@ -89,24 +87,20 @@ func stripCodeFence(value string) string {
 	if !strings.HasPrefix(value, "```") {
 		return value
 	}
-
-	firstLine, rest, ok := strings.Cut(value, "\n")
-	if !ok {
-		return value
-	}
-	if !strings.HasPrefix(firstLine, "```") {
-		return value
-	}
-	if !strings.HasSuffix(rest, "```") {
+	_, rest, ok := strings.Cut(value, "\n")
+	if !ok || !strings.HasSuffix(rest, "```") {
 		return value
 	}
 	return strings.TrimSpace(strings.TrimSuffix(rest, "```"))
 }
 
-func normalizeList(values []string) []string {
+func normalizeList(field string, values []string) ([]string, error) {
 	normalized := make([]string, len(values))
 	for i, value := range values {
 		normalized[i] = strings.TrimSpace(value)
+		if normalized[i] == "" {
+			return nil, fmt.Errorf("card %s must not contain blank items", field)
+		}
 	}
-	return normalized
+	return normalized, nil
 }

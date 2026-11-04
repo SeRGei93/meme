@@ -28,9 +28,9 @@ func TestOpenAIClientSendsAChatCompletionRequest(t *testing.T) {
 		got.ContentType = r.Header.Get("Content-Type")
 
 		var body struct {
-			Model         string         `json:"model"`
-			Messages      []card.Message `json:"messages"`
-			Temperature   float64        `json:"temperature"`
+			Model          string         `json:"model"`
+			Messages       []card.Message `json:"messages"`
+			Temperature    float64        `json:"temperature"`
 			ResponseFormat struct {
 				Type string `json:"type"`
 			} `json:"response_format"`

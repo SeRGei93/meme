@@ -27,7 +27,7 @@ func TestSaveCardReplacesHeuristicCardAndUpdatesFTS(t *testing.T) {
 		Atoms:     []string{"Quicksilver uses a file-backed cache."},
 	}
 	indexedAt := now.Add(time.Minute)
-	applied, err := st.SaveCard(ctx, recordID, before.Revision, generated, "test-model", indexedAt)
+	applied, err := st.SaveCard(ctx, recordID, before.FinalizedAt, generated, "test-model", indexedAt)
 	if err != nil {
 		t.Fatalf("SaveCard() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestSaveCardReplacesHeuristicCardAndUpdatesFTS(t *testing.T) {
 	}
 }
 
-func TestSaveCardIgnoresAStaleRevision(t *testing.T) {
+func TestSaveCardIgnoresAStaleFinalization(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -80,6 +80,9 @@ func TestSaveCardIgnoresAStaleRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
+	if before.FinalizedAt == nil {
+		t.Fatal("final record has no finalized_at")
+	}
 
 	generated := ingest.Card{
 		Title:     "Stale title",
@@ -88,20 +91,174 @@ func TestSaveCardIgnoresAStaleRevision(t *testing.T) {
 		Keywords:  []string{"stale"},
 		Atoms:     []string{"stale atom"},
 	}
-	applied, err := st.SaveCard(ctx, recordID, before.Revision+1, generated, "test-model", now)
+	newerFinalization := before.FinalizedAt.Add(time.Minute)
+	applied, err := st.SaveCard(ctx, recordID, &newerFinalization, generated, "test-model", now)
 	if err != nil {
 		t.Fatalf("SaveCard() error = %v", err)
 	}
 	if applied {
-		t.Fatal("SaveCard() applied = true for a stale revision")
+		t.Fatal("SaveCard() applied = true for a stale finalization")
 	}
 
-	after, err := st.GetRecord(ctx, recordID)
+	applied, err = st.SaveCard(ctx, recordID, before.FinalizedAt, generated, "test-model", now)
+	if err != nil {
+		t.Fatalf("SaveCard(current finalization) error = %v", err)
+	}
+	if !applied {
+		t.Fatal("SaveCard(current finalization) applied = false, want true")
+	}
+}
+
+func TestSaveCardStillAppliesAfterALiveCapture(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	recordID := ingestSession(t, st, clientID, "card-live", "ses_card_live", now, true)
+
+	before, err := st.GetRecord(ctx, recordID)
 	if err != nil {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
-	if after.Title != before.Title || after.CardStatus != CardStatusQueued {
-		t.Errorf("stale card was written: title %q, card_status %q", after.Title, after.CardStatus)
+	if before.FinalizedAt == nil {
+		t.Fatal("final record has no finalized_at")
+	}
+
+	// A live capture updates raw_text and revision but must not invalidate the
+	// card job that is already running for this finalized version.
+	live := ingest.Bundle{
+		BundleID:   "2f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3",
+		ExternalID: "ses_card_live",
+		ProjectKey: "github.com/SeRGei93/meme",
+		Title:      "Session ses_card_live",
+		Final:      false,
+		StartedAt:  now.Add(-time.Hour),
+		UpdatedAt:  now.Add(10 * time.Minute),
+		Messages: []ingest.Message{
+			{ID: "msg_1", Role: ingest.RoleUser, Text: "Question ses_card_live", At: now.Add(-time.Hour)},
+			{ID: "msg_2", Role: ingest.RoleAssistant, Text: "A later live answer", At: now.Add(10 * time.Minute)},
+		},
+	}
+	if _, err := st.IngestSession(ctx, IngestParams{
+		ClientID:       clientID,
+		Source:         "opencode",
+		IdempotencyKey: live.BundleID,
+		Bundle:         live,
+		Now:            now.Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("live IngestSession() error = %v", err)
+	}
+
+	afterLive, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if afterLive.Revision == before.Revision {
+		t.Fatal("live capture did not bump the revision")
+	}
+	if afterLive.FinalizedAt == nil || !afterLive.FinalizedAt.Equal(*before.FinalizedAt) {
+		t.Fatalf("live capture changed finalized_at: %v -> %v", before.FinalizedAt, afterLive.FinalizedAt)
+	}
+
+	generated := ingest.Card{
+		Title:     "Generated after a live capture",
+		Summary:   "The card still applies.",
+		Questions: []string{"a?", "b?", "c?", "d?", "e?"},
+		Keywords:  []string{"applied"},
+		Atoms:     []string{"The card applies to the finalized version."},
+	}
+	applied, err := st.SaveCard(ctx, recordID, before.FinalizedAt, generated, "test-model", now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("SaveCard() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("SaveCard() applied = false after a live capture, want true")
+	}
+}
+
+func TestSaveCardLetsANewerFinalVersionWriteItsOwnCard(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	recordID := ingestSession(t, st, clientID, "card-version-a", "ses_card_version", now, true)
+
+	before, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if before.FinalizedAt == nil {
+		t.Fatal("final record has no finalized_at")
+	}
+
+	newer := ingest.Bundle{
+		BundleID:   "3f1a2f4a-5b1c-4c55-9dbb-59f8c0f1a2b3",
+		ExternalID: "ses_card_version",
+		ProjectKey: "github.com/SeRGei93/meme",
+		Title:      "Session ses_card_version",
+		Final:      true,
+		StartedAt:  now.Add(-time.Hour),
+		UpdatedAt:  now.Add(10 * time.Minute),
+		Messages: []ingest.Message{
+			{ID: "msg_1", Role: ingest.RoleUser, Text: "A newer final question", At: now.Add(10 * time.Minute)},
+		},
+	}
+	result, err := st.IngestSession(ctx, IngestParams{
+		ClientID:       clientID,
+		Source:         "opencode",
+		IdempotencyKey: newer.BundleID,
+		Bundle:         newer,
+		Now:            now.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("newer IngestSession() error = %v", err)
+	}
+	if result.RecordID != recordID {
+		t.Fatalf("newer ingest created record %d, want %d", result.RecordID, recordID)
+	}
+
+	afterNewer, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if afterNewer.FinalizedAt == nil || afterNewer.FinalizedAt.Equal(*before.FinalizedAt) {
+		t.Fatalf("newer final version did not change finalized_at: %v", afterNewer.FinalizedAt)
+	}
+
+	oldCard := ingest.Card{
+		Title:     "Old card",
+		Summary:   "Generated for the old final version.",
+		Questions: []string{"a?", "b?", "c?", "d?", "e?"},
+		Keywords:  []string{"old"},
+		Atoms:     []string{"old atom"},
+	}
+	applied, err := st.SaveCard(ctx, recordID, before.FinalizedAt, oldCard, "test-model", now)
+	if err != nil {
+		t.Fatalf("SaveCard(old) error = %v", err)
+	}
+	if applied {
+		t.Fatal("old card was applied after a newer final version arrived")
+	}
+
+	newCard := ingest.Card{
+		Title:     "New card",
+		Summary:   "Generated for the new final version.",
+		Questions: []string{"a?", "b?", "c?", "d?", "e?"},
+		Keywords:  []string{"new"},
+		Atoms:     []string{"new atom"},
+	}
+	applied, err = st.SaveCard(ctx, recordID, afterNewer.FinalizedAt, newCard, "test-model", now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("SaveCard(new) error = %v", err)
+	}
+	if !applied {
+		t.Fatal("new card was not applied for the current final version")
+	}
+
+	final, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if final.Title != "New card" || final.CardStatus != CardStatusOK {
+		t.Errorf("final record = (title %q, card_status %q), want the new card", final.Title, final.CardStatus)
 	}
 }
 
@@ -116,7 +273,7 @@ func TestFailCardKeepsTheHeuristicCard(t *testing.T) {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
 
-	applied, err := st.FailCard(ctx, recordID, before.Revision, now.Add(time.Minute))
+	applied, err := st.FailCard(ctx, recordID, before.FinalizedAt, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("FailCard() error = %v", err)
 	}
@@ -140,7 +297,7 @@ func TestFailCardKeepsTheHeuristicCard(t *testing.T) {
 	}
 }
 
-func TestFailCardIgnoresAStaleRevision(t *testing.T) {
+func TestFailCardIgnoresAStaleFinalization(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -150,12 +307,47 @@ func TestFailCardIgnoresAStaleRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
+	if before.FinalizedAt == nil {
+		t.Fatal("final record has no finalized_at")
+	}
 
-	applied, err := st.FailCard(ctx, recordID, before.Revision+1, now)
+	newerFinalization := before.FinalizedAt.Add(time.Minute)
+	applied, err := st.FailCard(ctx, recordID, &newerFinalization, now)
 	if err != nil {
 		t.Fatalf("FailCard() error = %v", err)
 	}
 	if applied {
-		t.Fatal("FailCard() applied = true for a stale revision")
+		t.Fatal("FailCard() applied = true for a stale finalization")
+	}
+}
+
+func TestKeepHeuristicCardMarksTheCardTerminal(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	recordID := ingestSession(t, st, clientID, "card-heuristic", "ses_card_heuristic", now, true)
+
+	before, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+
+	applied, err := st.KeepHeuristicCard(ctx, recordID, before.FinalizedAt, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("KeepHeuristicCard() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("KeepHeuristicCard() applied = false, want true")
+	}
+
+	after, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if after.CardStatus != CardStatusHeuristic {
+		t.Errorf("CardStatus = %q, want heuristic", after.CardStatus)
+	}
+	if after.Title != before.Title {
+		t.Errorf("Title = %q, want heuristic title %q", after.Title, before.Title)
 	}
 }

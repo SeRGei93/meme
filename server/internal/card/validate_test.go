@@ -116,6 +116,16 @@ func TestValidateRejectsInvalidCards(t *testing.T) {
 			wantErr: "keywords",
 		},
 		{
+			name:    "whitespace-only keyword",
+			mutate:  func(m map[string]any) { m["keywords"] = []string{"sqlite", "   "} },
+			wantErr: "keywords",
+		},
+		{
+			name:    "whitespace-only atom",
+			mutate:  func(m map[string]any) { m["atoms"] = []string{"   "} },
+			wantErr: "atoms",
+		},
+		{
 			name:    "wrong item type",
 			mutate:  func(m map[string]any) { m["atoms"] = []any{"a fact", 42} },
 			wantErr: "atoms",

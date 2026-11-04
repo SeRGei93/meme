@@ -50,7 +50,7 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 	}
 
 	if g.Client == nil {
-		return g.fallback(ctx, record, errors.New("LLM client is not configured"))
+		return g.keepHeuristic(ctx, record, errors.New("LLM client is not configured"))
 	}
 
 	content, err := g.Client.Complete(ctx, BuildMessages(record, g.MaxInputChars))
@@ -66,14 +66,13 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 		return g.fallback(ctx, record, err)
 	}
 
-	applied, err := g.Store.SaveCard(ctx, record.ID, record.Revision, generated, g.Model, g.now())
+	applied, err := g.Store.SaveCard(ctx, record.ID, record.FinalizedAt, generated, g.Model, g.now())
 	if err != nil {
 		return err
 	}
 	if !applied {
-		g.logger().Info("card discarded because the record changed",
+		g.logger().Info("card discarded because a newer final version was captured",
 			"record_id", record.ID,
-			"revision", record.Revision,
 		)
 		return nil
 	}
@@ -89,7 +88,7 @@ func (g *Generator) Process(ctx context.Context, job store.Job) error {
 }
 
 func (g *Generator) fallback(ctx context.Context, record store.Record, cause error) error {
-	applied, err := g.Store.FailCard(ctx, record.ID, record.Revision, g.now())
+	applied, err := g.Store.FailCard(ctx, record.ID, record.FinalizedAt, g.now())
 	if err != nil {
 		return err
 	}
@@ -97,6 +96,20 @@ func (g *Generator) fallback(ctx context.Context, record store.Record, cause err
 		g.logger().Warn("card generation failed; keeping the heuristic card",
 			"record_id", record.ID,
 			"error", mask.Text(cause.Error()),
+		)
+	}
+	return nil
+}
+
+func (g *Generator) keepHeuristic(ctx context.Context, record store.Record, cause error) error {
+	applied, err := g.Store.KeepHeuristicCard(ctx, record.ID, record.FinalizedAt, g.now())
+	if err != nil {
+		return err
+	}
+	if applied {
+		g.logger().Warn("card generation is not configured; keeping the heuristic card",
+			"record_id", record.ID,
+			"reason", mask.Text(cause.Error()),
 		)
 	}
 	return nil

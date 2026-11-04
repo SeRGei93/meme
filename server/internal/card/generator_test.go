@@ -11,6 +11,7 @@ import (
 	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/card"
 	"github.com/SeRGei93/meme/server/internal/ingest"
+	"github.com/SeRGei93/meme/server/internal/queue"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -70,6 +71,45 @@ func openCardStore(t *testing.T) (*store.Store, int64, int64, int64) {
 
 func generatedCardJSON() string {
 	return strings.ReplaceAll(validCardJSON(), "sqlite", "quicksilver")
+}
+
+func TestWorkerCompletesAQueuedCardJob(t *testing.T) {
+	st, recordID, _, _ := openCardStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 5, 0, 0, time.UTC)
+	worker := &queue.Worker{
+		Store:        st,
+		Processor:    &card.Generator{Store: st, Client: &fakeClient{content: generatedCardJSON()}, Model: "test-model", Now: func() time.Time { return now }},
+		PollInterval: time.Millisecond,
+		Now:          func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("RunOnce() processed = false, want true")
+	}
+
+	record, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusOK {
+		t.Errorf("CardStatus = %q, want ok", record.CardStatus)
+	}
+	if record.CardModel == nil || *record.CardModel != "test-model" {
+		t.Errorf("CardModel = %v, want test-model", record.CardModel)
+	}
+
+	jobs, err := st.ListJobs(ctx, store.ListJobsParams{})
+	if err != nil {
+		t.Fatalf("ListJobs() error = %v", err)
+	}
+	if len(jobs.Items) != 1 || jobs.Items[0].Status != store.JobDone {
+		t.Fatalf("jobs = %+v, want one done job", jobs.Items)
+	}
 }
 
 func TestGeneratorSavesAValidLLMCardAndIndexesIt(t *testing.T) {
@@ -185,7 +225,7 @@ func TestGeneratorKeepsTheHeuristicCardWhenTheResponseIsInvalid(t *testing.T) {
 	}
 }
 
-func TestGeneratorWithoutAClientFallsBackToTheHeuristicCard(t *testing.T) {
+func TestGeneratorWithoutAClientKeepsTheHeuristicCard(t *testing.T) {
 	st, recordID, jobID, _ := openCardStore(t)
 	ctx := context.Background()
 	generator := &card.Generator{Store: st}
@@ -198,8 +238,8 @@ func TestGeneratorWithoutAClientFallsBackToTheHeuristicCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecord() error = %v", err)
 	}
-	if record.CardStatus != store.CardStatusFailed {
-		t.Errorf("CardStatus = %q, want failed", record.CardStatus)
+	if record.CardStatus != store.CardStatusHeuristic {
+		t.Errorf("CardStatus = %q, want heuristic", record.CardStatus)
 	}
 }
 

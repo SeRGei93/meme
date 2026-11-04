@@ -27,7 +27,7 @@ type LLMConfig struct {
 
 // Enabled reports whether an LLM endpoint and model are configured.
 func (c LLMConfig) Enabled() bool {
-	return c.BaseURL != ""
+	return c.BaseURL != "" && c.Model != ""
 }
 
 // Config is the server configuration loaded from the environment.

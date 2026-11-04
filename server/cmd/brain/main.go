@@ -184,7 +184,7 @@ func newCardGenerator(cfg config.Config, st *store.Store, logger *slog.Logger) (
 		return nil, fmt.Errorf("configure card generator: %w", err)
 	}
 	generator.Client = client
-	logger.Info("card generation enabled", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
+	logger.Info("card generation enabled", "model", cfg.LLM.Model)
 	return generator, nil
 }
 
