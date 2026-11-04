@@ -43,6 +43,12 @@ func (s *server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, toProjectListResponse(projects))
+}
+
+// toProjectListResponse is shared by REST and MCP so both surfaces serialize
+// the same fields.
+func toProjectListResponse(projects []store.Project) projectListResponse {
 	items := make([]projectResponse, len(projects))
 	for i, project := range projects {
 		items[i] = projectResponse{
@@ -54,6 +60,5 @@ func (s *server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:      project.CreatedAt,
 		}
 	}
-
-	writeJSON(w, http.StatusOK, projectListResponse{Items: items})
+	return projectListResponse{Items: items}
 }

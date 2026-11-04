@@ -123,14 +123,16 @@ JSON-RPC error, а успешный JSON-RPC ответ с `isError: true`:
 `internal_error`, `service_unavailable`. `unauthorized`, `forbidden` и `rate_limited`
 возвращаются на HTTP-уровне до JSON-RPC.
 
-Протокольные ошибки — обычные JSON-RPC errors:
+Протокольные ошибки — обычные JSON-RPC errors. На невалидный JSON-RPC сервер
+отвечает HTTP `400` с этим телом; ошибки инструментов и неизвестный метод —
+HTTP `200` (у метода — JSON-RPC error, у инструмента — `isError`).
 
 | Код | Значение |
 |---:|---|
-| `-32700` | Parse error |
-| `-32600` | Invalid Request |
+| `-32700` | Parse error (тело не является JSON) |
+| `-32600` | Invalid Request (не объект, неверные `jsonrpc`/`id`/`method`) |
 | `-32601` | Method not found |
-| `-32602` | Invalid params (неизвестный инструмент, битая форма JSON-RPC) |
+| `-32602` | Invalid params (неизвестный инструмент, битые аргументы) |
 | `-32603` | Internal error (баг сервера, не ошибка инструмента) |
 
 ## 4. Инструменты

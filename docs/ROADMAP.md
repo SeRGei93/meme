@@ -214,10 +214,10 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] `GET /search`, `GET /records/{id}`, `GET /projects`, `GET /graph`, `GET /stats`;
   - [ ] `GET /clients`, `POST /clients`, `DELETE /clients/{id}`;
   - [ ] `GET /jobs`.
-- [ ] MCP:
-  - [ ] streamable HTTP `/mcp`;
-  - [ ] `search`, `get_record`, `remember`, `list_projects`, `stats`;
-  - [ ] bearer auth + scopes.
+- [x] MCP:
+  - [x] streamable HTTP `/mcp`;
+  - [x] `search`, `get_record`, `remember`, `list_projects`, `stats`;
+  - [x] bearer auth + scopes.
 - [ ] Graph:
   - [ ] связи по проекту и пересечению keywords;
   - [ ] ограничение топ-N связей.

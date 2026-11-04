@@ -97,6 +97,38 @@ curl -fsS -X POST "$DOMAIN/api/v1/clients" \
 Токен показывается один раз в ответе (`token`). Сохранить его в Keychain приложения
 или в `~/.config/second-brain/mcp_token` (0600) для OpenCode MCP.
 
+## 5a. MCP для OpenCode
+
+После деплоя сервера с `/mcp` (тикет #13) OpenCode подключается к тому же домену:
+
+```bash
+install -m 600 /dev/null ~/.config/second-brain/mcp_token
+printf '%s' '<opencode-token>' > ~/.config/second-brain/mcp_token
+```
+
+```jsonc
+// ~/.config/opencode/opencode.jsonc
+{
+  "mcp": {
+    "servers": {
+      "second-brain": {
+        "type": "remote",
+        "url": "https://meme.aimerce.by/mcp",
+        "oauth": false,
+        "headers": {
+          "Authorization": "Bearer {file:~/.config/second-brain/mcp_token}"
+        },
+        "codemode": false
+      }
+    }
+  }
+}
+```
+
+Токену `kind=opencode` нужен scope `mcp:read` для `search`/`get_record`; добавьте
+`mcp:write`, если хотите вызывать `remember` из OpenCode. Полный контракт —
+[`docs/mcp-tools.md`](mcp-tools.md).
+
 ## 6. Персистентность и редеплой
 
 SQLite лежит в `/data/brain.db` на volume `brain-data`.
