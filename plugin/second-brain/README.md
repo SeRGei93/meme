@@ -12,11 +12,29 @@ JSON-бандлы в локальный spool. Сеть плагин не исп
 | `session.compaction.started` | пишет бандл сразу, до сжатия, `final=false`; hook `compaction` удерживает model call до записи (с одним повтором при ошибке) |
 | `session.execution.failed` | пишет бандл сразу, `final=true` |
 | `session.execution.interrupted` | пишет бандл сразу, `final=true` |
+| первый запуск | backfill существующей истории: `session.list` с пагинацией, `final=true` |
 
 Повторный `idle` сбрасывает таймер. События одной сессии обрабатываются
 последовательно. Если содержимое не изменилось, второй бандл не пишется; смена
 `final=false` на `final=true` пишется всегда. При выгрузке плагина (закрытие
 OpenCode) ожидающий `idle`-бандл сбрасывается на диск, а не теряется.
+
+## Backfill истории
+
+При первом запуске плагин импортирует сессии, созданные до его установки:
+
+- страницы по 50 через `session.list({ directory, limit, cursor })`, пока
+  `cursor.next` не станет пустым; повторяющийся курсор обрывает обход;
+- каждая сессия проходит обычный `get` + `context` + normalize и пишется с
+  `final=true`, поэтому per-session курсор и fingerprint не создают дублей;
+- между сессиями пауза 200 мс, чтобы не перегружать диск и OpenCode; live-события
+  продолжают обрабатываться параллельно;
+- ошибка одной сессии логируется и не останавливает остальные; после ошибки
+  маркер не считается завершённым, и следующий запуск повторит импорт (уже
+  записанные сессии пропускаются);
+- прогресс (`nextCursor`, счётчики) хранится в `ctx.storage` под
+  `backfill/v1/<hash(directory)>`; завершённый backfill больше не запускается,
+  прерванный (закрытие OpenCode) продолжается со следующей страницы.
 
 Нормализация: user/assistant текст и tool calls (`name`, `command`, `path`).
 Reasoning и вывод инструментов не сохраняются. Текст и поля обрезаются по
@@ -95,8 +113,7 @@ npm run typecheck
 ```
 
 Тесты на seam'ах: `loadConfig`, `normalizeSession`, `resolveProjectKey`,
-`writeBundle`, `createCapture`, `createEventRouter`. Интеграционный тест пишет
+`writeBundle`, `createCapture`, `createEventRouter`, `runBackfill`. Интеграционный тест пишет
 бандл реальным writer'ом и валидирует его через `tools/validate-spool.mjs`.
 
-Не входит в этот тикет: backfill истории (#15), команда `/remember` (#16),
-MCP-конфиг (#13).
+Не входит в этот тикет: команда `/remember` (#16).

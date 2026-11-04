@@ -244,12 +244,12 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] `setup(ctx)`;
   - [x] чтение `~/.config/second-brain/config.json`;
   - [x] `spool_dir` по умолчанию `~/.config/second-brain/spool`.
-- [ ] Backfill:
-  - [ ] `ctx.session.list({ directory, limit })`;
-  - [ ] пагинация `cursor.next`;
-  - [ ] `ctx.session.context(sessionID)`;
-  - [ ] `ctx.session.get(sessionID)`;
-  - [ ] маркер в `ctx.storage`, чтобы не повторять.
+- [x] Backfill:
+  - [x] `ctx.session.list({ directory, limit })`;
+  - [x] пагинация `cursor.next`;
+  - [x] `ctx.session.context(sessionID)`;
+  - [x] `ctx.session.get(sessionID)`;
+  - [x] маркер в `ctx.storage`, чтобы не повторять.
 - [x] Events:
   - [x] `session.idle` + debounce 3–5 минут;
   - [x] `session.compaction.started` — сразу;

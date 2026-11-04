@@ -171,3 +171,28 @@ test('cleanup flushes a session still waiting on the idle debounce', async () =>
     await rm(spoolDir, { recursive: true, force: true });
   }
 });
+
+test('setup backfills existing sessions into the spool', async () => {
+  const spoolDir = await mkdtemp(join(tmpdir(), 'sb-setup-'));
+  const fake = fakeContext();
+  fake.ctx.session.list = async () => ({
+    data: [SESSION],
+    cursor: { next: undefined },
+  });
+  const cleanup = await setupPlugin(fake.ctx, {
+    ...options(spoolDir),
+    backfill: { throttleMs: 0 },
+  });
+  try {
+    await waitFor(async () => (await readdir(spoolDir)).length === 1, 'backfill bundle');
+
+    const [name] = await readdir(spoolDir);
+    const bundle = JSON.parse(await readFile(join(spoolDir, name!), 'utf8'));
+    assert.equal(bundle.external_id, SESSION.id);
+    assert.equal(bundle.final, true);
+    assert.equal(bundle.source, 'opencode');
+  } finally {
+    await cleanup();
+    await rm(spoolDir, { recursive: true, force: true });
+  }
+});
