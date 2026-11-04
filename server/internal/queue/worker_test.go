@@ -1,8 +1,10 @@
 package queue_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,12 +135,14 @@ func TestWorkerRetriesTemporaryFailureWithBackoff(t *testing.T) {
 		errors.New("provider timeout"),
 		nil,
 	}}
+	var logs bytes.Buffer
 	worker := &queue.Worker{
 		Store:        st,
 		Processor:    processor,
 		MaxAttempts:  5,
 		PollInterval: time.Millisecond,
 		Now:          func() time.Time { return now },
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
 	}
 
 	if _, err := worker.RunOnce(ctx); err != nil {
@@ -156,6 +160,9 @@ func TestWorkerRetriesTemporaryFailureWithBackoff(t *testing.T) {
 	}
 	if !strings.Contains(job.Error, "[REDACTED]") || strings.Contains(job.Error, secret) {
 		t.Errorf("job.Error = %q, want a masked error", job.Error)
+	}
+	if strings.Contains(logs.String(), secret) {
+		t.Errorf("worker log contains the secret: %s", logs.String())
 	}
 
 	if processed, err := worker.RunOnce(ctx); err != nil || processed {

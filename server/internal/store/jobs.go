@@ -36,8 +36,11 @@ func (s JobStatus) Valid() bool {
 }
 
 const (
-	defaultJobLimit  = 50
-	maxJobLimit      = 200
+	// DefaultJobLimit is the contract's page size when limit is omitted.
+	DefaultJobLimit = 50
+	// MaxJobLimit is the contract's upper bound for GET /api/v1/jobs?limit.
+	MaxJobLimit = 200
+
 	maxJobErrorRunes = 2000
 )
 
@@ -149,6 +152,22 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, now time.Time) error 
 	return s.finishJob(ctx, id, JobDone, now, nil, "")
 }
 
+// MarkCardReady advances a queued card to ok once the worker has prepared it.
+// Until issue #10 wires LLM generation, the heuristic card written by ingest is
+// the card this transition makes ready.
+func (s *Store) MarkCardReady(ctx context.Context, recordID int64, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE records
+		SET card_status = ?, indexed_at = ?
+		WHERE id = ? AND card_status = ?`,
+		CardStatusOK, formatTime(now), recordID, CardStatusQueued,
+	)
+	if err != nil {
+		return fmt.Errorf("mark record %d card ready: %w", recordID, err)
+	}
+	return nil
+}
+
 // RetryJob returns a running job to the queue with the next retry instant.
 func (s *Store) RetryJob(ctx context.Context, id int64, now, next time.Time, errText string) error {
 	return s.finishJob(ctx, id, JobQueued, now, &next, errText)
@@ -208,10 +227,10 @@ func (s *Store) RecoverRunningJobs(ctx context.Context, now time.Time) (int, err
 func (s *Store) ListJobs(ctx context.Context, params ListJobsParams) (JobPage, error) {
 	limit := params.Limit
 	if limit == 0 {
-		limit = defaultJobLimit
+		limit = DefaultJobLimit
 	}
-	if limit < 1 || limit > maxJobLimit {
-		return JobPage{}, fmt.Errorf("%w: limit must be between 1 and %d", ErrInvalidJobQuery, maxJobLimit)
+	if limit < 1 || limit > MaxJobLimit {
+		return JobPage{}, fmt.Errorf("%w: limit must be between 1 and %d", ErrInvalidJobQuery, MaxJobLimit)
 	}
 	if params.Status != "" && !params.Status.Valid() {
 		return JobPage{}, fmt.Errorf("%w: unknown status %q", ErrInvalidJobQuery, params.Status)
@@ -270,7 +289,7 @@ func (s *Store) ListJobs(ctx context.Context, params ListJobsParams) (JobPage, e
 // so a crash cannot finalize a session without queueing its card.
 func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle time.Duration) (int, error) {
 	if idle <= 0 {
-		return 0, fmt.Errorf("%w: idle must be positive", ErrInvalidJobQuery)
+		return 0, errors.New("idle must be positive")
 	}
 	now = now.UTC()
 	cutoff := now.Add(-idle)
@@ -283,7 +302,8 @@ func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle ti
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, client_id, source, external_id, revision
 		FROM records
-		WHERE is_final = 0 AND julianday(updated_at) < julianday(?)
+		WHERE is_final = 0 AND kind = 'session'
+		  AND julianday(updated_at) < julianday(?)
 		ORDER BY id`,
 		formatTime(cutoff),
 	)
@@ -322,9 +342,10 @@ func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle ti
 	for _, session := range sessions {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE records
-			SET is_final = 1, finalized_at = ?, card_status = 'queued'
+			SET is_final = 1, finalized_at = ?, card_status = ?,
+				revision = revision + 1
 			WHERE id = ? AND is_final = 0`,
-			formatTime(now), session.id,
+			formatTime(now), CardStatusQueued, session.id,
 		)
 		if err != nil {
 			_ = tx.Rollback()
@@ -338,13 +359,7 @@ func (s *Store) FinalizeIdleSessions(ctx context.Context, now time.Time, idle ti
 		if affected == 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO ingest_jobs
-				(client_id, idempotency_key, source, external_id, record_id, kind, status, created_at, updated_at)
-			VALUES (?, '', ?, ?, ?, 'ingest', 'queued', ?, ?)`,
-			session.clientID, session.source, session.externalID, session.id,
-			formatTime(now), formatTime(now),
-		); err != nil {
+		if _, err := insertIngestJob(ctx, tx, session.clientID, "", session.source, session.externalID, session.id, now); err != nil {
 			_ = tx.Rollback()
 			return 0, fmt.Errorf("enqueue finalized record %d: %w", session.id, err)
 		}

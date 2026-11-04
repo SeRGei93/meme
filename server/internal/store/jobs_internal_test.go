@@ -277,6 +277,43 @@ func TestGetJobReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestMarkCardReadyAdvancesQueuedCard(t *testing.T) {
+	st, clientID := openJobStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	recordID := ingestSession(t, st, clientID, "card-ready", "ses_card", now, true)
+
+	before, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if before.CardStatus != CardStatusQueued {
+		t.Fatalf("card_status before = %q, want queued", before.CardStatus)
+	}
+
+	readyAt := now.Add(time.Minute)
+	if err := st.MarkCardReady(ctx, recordID, readyAt); err != nil {
+		t.Fatalf("MarkCardReady() error = %v", err)
+	}
+	after, err := st.GetRecord(ctx, recordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if after.CardStatus != CardStatusOK {
+		t.Errorf("card_status after = %q, want ok", after.CardStatus)
+	}
+	if !after.IndexedAt.Equal(readyAt) {
+		t.Errorf("indexed_at = %s, want %s", after.IndexedAt, readyAt)
+	}
+	if after.Revision != before.Revision {
+		t.Errorf("revision = %d, want %d (card readiness is not a content revision)", after.Revision, before.Revision)
+	}
+
+	if err := st.MarkCardReady(ctx, recordID, readyAt.Add(time.Minute)); err != nil {
+		t.Errorf("second MarkCardReady() error = %v, want idempotent no-op", err)
+	}
+}
+
 func TestFinalizeIdleSessionsMarksFinalAndEnqueuesJob(t *testing.T) {
 	st, clientID := openJobStore(t)
 	ctx := context.Background()
@@ -285,6 +322,7 @@ func TestFinalizeIdleSessionsMarksFinalAndEnqueuesJob(t *testing.T) {
 	old := ingestSession(t, st, clientID, "old-live", "ses_old", now.Add(-31*time.Minute), false)
 	recent := ingestSession(t, st, clientID, "recent-live", "ses_recent", now.Add(-10*time.Minute), false)
 	final := ingestSession(t, st, clientID, "already-final", "ses_final", now.Add(-5*time.Minute), true)
+	memory := insertMemoryRecord(t, st, clientID, now.Add(-2*time.Hour))
 
 	before, err := st.ListJobs(ctx, ListJobsParams{Limit: 200})
 	if err != nil {
@@ -309,8 +347,19 @@ func TestFinalizeIdleSessionsMarksFinalAndEnqueuesJob(t *testing.T) {
 	if oldRecord.FinalizedAt == nil || !oldRecord.FinalizedAt.Equal(now) {
 		t.Errorf("old record finalized_at = %v, want %s", oldRecord.FinalizedAt, now)
 	}
-	if oldRecord.CardStatus != "queued" {
+	if oldRecord.CardStatus != CardStatusQueued {
 		t.Errorf("old record card_status = %q, want queued", oldRecord.CardStatus)
+	}
+	if oldRecord.Revision != 2 {
+		t.Errorf("old record revision = %d, want 2 after finalization", oldRecord.Revision)
+	}
+
+	memoryRecord, err := st.GetRecord(ctx, memory)
+	if err != nil {
+		t.Fatalf("GetRecord(memory) error = %v", err)
+	}
+	if memoryRecord.IsFinal {
+		t.Error("memory record is_final = true, want finalizer to ignore non-session records")
 	}
 
 	for name, id := range map[string]int64{"recent": recent, "final": final} {
@@ -386,6 +435,29 @@ func ingestSession(t *testing.T, st *Store, clientID int64, bundleID, externalID
 		t.Fatalf("IngestSession(%s) error = %v", externalID, err)
 	}
 	return result.RecordID
+}
+
+func insertMemoryRecord(t *testing.T, st *Store, clientID int64, updatedAt time.Time) int64 {
+	t.Helper()
+
+	result, err := st.db.ExecContext(context.Background(), `
+		INSERT INTO records (
+			client_id, source, external_id, project_id, kind, title, summary,
+			questions, keywords, atoms, raw_text, content_hash, revision,
+			is_final, finalized_at, started_at, updated_at, indexed_at,
+			card_model, card_status, metadata_json
+		) VALUES (?, 'jarvis', 'mem_idle', NULL, 'memory', 'Memory', '', '', '', '',
+			'raw memory text', 'memory-hash', 1, 0, NULL, NULL, ?, ?, NULL, 'heuristic', '{}')`,
+		clientID, formatTime(updatedAt), formatTime(updatedAt),
+	)
+	if err != nil {
+		t.Fatalf("insert memory record: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("insert memory record id: %v", err)
+	}
+	return id
 }
 
 func jobIDs(jobs []Job) []int64 {

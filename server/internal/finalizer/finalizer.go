@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/SeRGei93/meme/server/internal/mask"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -33,27 +34,22 @@ func (f *Finalizer) Run(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return nil
 	}
-	if _, err := f.RunOnce(ctx); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
 
 	ticker := time.NewTicker(f.interval())
 	defer ticker.Stop()
 
 	for {
+		if _, err := f.RunOnce(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			f.logger().Error("finalize idle sessions", "error", mask.Text(err.Error()))
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if _, err := f.RunOnce(ctx); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return err
-			}
 		}
 	}
 }

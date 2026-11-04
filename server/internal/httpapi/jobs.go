@@ -11,11 +11,7 @@ import (
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
-const (
-	jobsPath         = "/api/v1/jobs"
-	jobsMaxLimit     = 200
-	jobsDefaultLimit = 50
-)
+const jobsPath = "/api/v1/jobs"
 
 type jobListResponse struct {
 	Items      []jobResponse `json:"items"`
@@ -85,11 +81,11 @@ func parseJobParams(w http.ResponseWriter, r *http.Request) (store.ListJobsParam
 		}
 	}
 
-	limit := jobsDefaultLimit
+	limit := store.DefaultJobLimit
 	if raw := query.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > jobsMaxLimit {
-			return invalid("limit", "limit must be an integer between 1 and "+strconv.Itoa(jobsMaxLimit))
+		if err != nil || parsed < 1 || parsed > store.MaxJobLimit {
+			return invalid("limit", "limit must be an integer between 1 and "+strconv.Itoa(store.MaxJobLimit))
 		}
 		limit = parsed
 	}

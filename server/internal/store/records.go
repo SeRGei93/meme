@@ -18,6 +18,15 @@ var ErrIdempotencyKeyReused = errors.New("idempotency key reused with a differen
 
 const idempotencyTTL = 24 * time.Hour
 
+// Card statuses from the v1 contract. A heuristic card is written on ingest;
+// the queue advances it to ok or failed.
+const (
+	CardStatusHeuristic = "heuristic"
+	CardStatusQueued    = "queued"
+	CardStatusOK        = "ok"
+	CardStatusFailed    = "failed"
+)
+
 // IngestParams is one validated session bundle ready to be persisted.
 type IngestParams struct {
 	ClientID       int64
@@ -281,10 +290,10 @@ func replaySessionRecord(ctx context.Context, tx *sql.Tx, recordID int64) (Inges
 }
 
 func insertSessionRecord(ctx context.Context, tx *sql.Tx, params preparedIngest, projectID int64) (IngestResult, error) {
-	cardStatus := "heuristic"
+	cardStatus := CardStatusHeuristic
 	var finalizedAt any
 	if params.Bundle.Final {
-		cardStatus = "queued"
+		cardStatus = CardStatusQueued
 		finalizedAt = formatTime(params.Now)
 	}
 
@@ -379,14 +388,14 @@ func updateSessionRecord(ctx context.Context, tx *sql.Tx, params preparedIngest,
 			updated_at    = ?,
 			indexed_at    = ?,
 			card_model    = NULL,
-			card_status   = 'queued',
+			card_status   = ?,
 			metadata_json = ?
 		WHERE id = ?`,
 		projectID, params.card.Title, params.card.Summary,
 		joinList(params.card.Questions), joinList(params.card.Keywords), joinList(params.card.Atoms),
 		params.rawText, params.contentHash, formatTime(params.Now),
 		formatTime(params.Bundle.StartedAt), formatTime(params.Bundle.UpdatedAt), formatTime(params.Now),
-		metadata, recordID,
+		CardStatusQueued, metadata, recordID,
 	)
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("update session record: %w", err)
@@ -409,21 +418,31 @@ func enqueueIngestJob(ctx context.Context, tx *sql.Tx, params preparedIngest, re
 		return nil, nil
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO ingest_jobs
-			(client_id, idempotency_key, source, external_id, record_id, kind, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'ingest', 'queued', ?, ?)`,
-		params.ClientID, params.IdempotencyKey, params.Source, params.Bundle.ExternalID,
-		recordID, formatTime(params.Now), formatTime(params.Now),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("enqueue ingest job: %w", err)
-	}
-	id, err := result.LastInsertId()
+	id, err := insertIngestJob(ctx, tx, params.ClientID, params.IdempotencyKey, params.Source, params.Bundle.ExternalID, recordID, params.Now)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue ingest job: %w", err)
 	}
 	return &id, nil
+}
+
+// insertIngestJob is the single insert path shared by live ingest and the
+// idle-session finalizer.
+func insertIngestJob(ctx context.Context, tx *sql.Tx, clientID int64, idempotencyKey, source, externalID string, recordID int64, now time.Time) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_jobs
+			(client_id, idempotency_key, source, external_id, record_id, kind, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'ingest', 'queued', ?, ?)`,
+		clientID, idempotencyKey, source, externalID, recordID,
+		formatTime(now), formatTime(now),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert ingest job: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("insert ingest job: %w", err)
+	}
+	return id, nil
 }
 
 func latestIngestJob(ctx context.Context, tx *sql.Tx, recordID int64) (*int64, error) {

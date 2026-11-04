@@ -90,10 +90,14 @@ func serve() error {
 	worker := &queue.Worker{
 		Store:  st,
 		Logger: logger,
-		// Card generation is issue #10. The queue lifecycle is wired now so
-		// ingest jobs are processed and recover after restarts.
-		Processor: queue.ProcessorFunc(func(context.Context, store.Job) error {
-			return nil
+		// Issue #10 replaces this with LLM generation and heuristic fallback.
+		// Until then the heuristic card written by ingest is marked ready, so
+		// completed jobs leave card_status in a terminal state.
+		Processor: queue.ProcessorFunc(func(ctx context.Context, job store.Job) error {
+			if job.RecordID == nil {
+				return nil
+			}
+			return st.MarkCardReady(ctx, *job.RecordID, time.Now().UTC())
 		}),
 	}
 	finalizer := &finalizer.Finalizer{Store: st, Logger: logger}

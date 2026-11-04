@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/SeRGei93/meme/server/internal/mask"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -100,27 +101,28 @@ func (w *Worker) Run(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return nil
 	}
-	if _, err := w.Recover(ctx); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
 
 	ticker := time.NewTicker(w.pollInterval())
 	defer ticker.Stop()
 
+	recovered := false
 	for {
-		for {
-			processed, err := w.RunOnce(ctx)
-			if err != nil {
+		if !recovered {
+			if _, err := w.Recover(ctx); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
-				return err
+				w.logger().Error("recover running jobs", "error", mask.Text(err.Error()))
+			} else {
+				recovered = true
 			}
-			if !processed || ctx.Err() != nil {
-				break
+		}
+		if recovered {
+			if err := w.drain(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				w.logger().Error("process jobs", "error", mask.Text(err.Error()))
 			}
 		}
 
@@ -128,6 +130,19 @@ func (w *Worker) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+		}
+	}
+}
+
+// drain processes every job that is due until the queue is empty.
+func (w *Worker) drain(ctx context.Context) error {
+	for {
+		processed, err := w.RunOnce(ctx)
+		if err != nil {
+			return err
+		}
+		if !processed || ctx.Err() != nil {
+			return nil
 		}
 	}
 }
@@ -181,7 +196,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.logger().Error("job failed",
 			"job_id", job.ID,
 			"attempts", job.Attempts,
-			"error", processErr,
+			"error", mask.Text(processErr.Error()),
 		)
 		return true, nil
 	}
@@ -194,7 +209,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		"job_id", job.ID,
 		"attempts", job.Attempts,
 		"next_retry_at", next,
-		"error", processErr,
+		"error", mask.Text(processErr.Error()),
 	)
 	return true, nil
 }
