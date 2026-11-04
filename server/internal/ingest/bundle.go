@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/SeRGei93/meme/server/internal/mask"
 )
 
 // Role is an allowed message author.
@@ -82,6 +84,7 @@ type Bundle struct {
 	finalSet     bool
 	startedAtSet bool
 	updatedAtSet bool
+	masked       bool
 }
 
 // ValidationError is a schema or business-rule violation. HTTP layers map it to
@@ -304,6 +307,42 @@ func validateMaxRunes(field, value string, max int) error {
 	return nil
 }
 
+// Masked returns a copy of the bundle with secrets removed from every
+// user-authored content field. Persistence and LLM prompt builders must use the
+// masked bundle, never the original request. Structural identifiers and
+// project coordinates stay intact because they are lookup keys, not content.
+func (b Bundle) Masked() Bundle {
+	masked := b
+	masked.masked = true
+	masked.Title = mask.Text(b.Title)
+
+	if b.Messages != nil {
+		masked.Messages = make([]Message, len(b.Messages))
+		for i, message := range b.Messages {
+			message.Text = mask.Text(message.Text)
+			if message.ToolCalls != nil {
+				calls := make([]ToolCall, len(message.ToolCalls))
+				for j, call := range message.ToolCalls {
+					call.Command = mask.Text(call.Command)
+					call.Path = mask.Text(call.Path)
+					calls[j] = call
+				}
+				message.ToolCalls = calls
+			}
+			masked.Messages[i] = message
+		}
+	}
+
+	if b.Metadata != nil {
+		masked.Metadata = make(Metadata, len(b.Metadata))
+		for key, value := range b.Metadata {
+			masked.Metadata[key] = mask.Text(value)
+		}
+	}
+
+	return masked
+}
+
 // ContentHash identifies the knowledge content of a session. `updated_at` is
 // excluded deliberately: a live capture that only reports activity must not
 // create a new revision.
@@ -351,6 +390,8 @@ func hash(data []byte) string {
 }
 
 // RawText renders messages in the human-readable form stored on the record.
+// Secrets are masked here as a last line of defence so prompt builders and
+// callers that skip Bundle.Masked still cannot leak credentials.
 func (b Bundle) RawText() string {
 	parts := make([]string, 0, len(b.Messages))
 	for _, message := range b.Messages {
@@ -375,7 +416,11 @@ func (b Bundle) RawText() string {
 		}
 		parts = append(parts, line)
 	}
-	return strings.Join(parts, "\n\n")
+	text := strings.Join(parts, "\n\n")
+	if b.masked {
+		return text
+	}
+	return mask.Text(text)
 }
 
 // Card is the card-shaped part of a record.
@@ -389,15 +434,21 @@ type Card struct {
 
 // HeuristicCard builds the cheap fallback card written before (or instead of)
 // LLM generation: the bundle title plus the first useful assistant reply.
+// Content is masked so a future prompt built from the card is safe even when a
+// caller passes the original bundle.
 func (b Bundle) HeuristicCard() Card {
 	summary := firstText(b.Messages, RoleAssistant)
 	if summary == "" {
 		summary = firstText(b.Messages, RoleUser)
 	}
-	summary = truncateRunes(summary, 1000)
+	title := b.Title
+	if !b.masked {
+		title = mask.Text(title)
+		summary = mask.Text(summary)
+	}
 	return Card{
-		Title:     b.Title,
-		Summary:   summary,
+		Title:     title,
+		Summary:   truncateRunes(summary, 1000),
 		Questions: []string{},
 		Keywords:  []string{},
 		Atoms:     []string{},
