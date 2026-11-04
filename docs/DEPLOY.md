@@ -17,11 +17,17 @@ openssl rand -hex 32   # BRAIN_ADMIN_TOKEN
 Опционально для генерации карточек через LLM:
 
 ```dotenv
-BRAIN_LLM_BASE_URL=https://api.openai.com/v1
-BRAIN_LLM_API_KEY=...
-BRAIN_LLM_MODEL=gpt-4o-mini
+BRAIN_LLM_BASE_URL=https://openrouter.ai/api/v1
+BRAIN_LLM_API_KEY=sk-or-v1-...
+BRAIN_LLM_MODEL=openai/gpt-6-luna
 BRAIN_LLM_MAX_INPUT_CHARS=24000
 ```
+
+OpenRouter — OpenAI-совместимый endpoint, отдельный SDK не нужен: сервер сам
+добавляет `/chat/completions` к `BRAIN_LLM_BASE_URL` и отправляет bearer-ключ.
+`BRAIN_LLM_BASE_URL` и `BRAIN_LLM_MODEL` задаются только вместе: если задан один,
+сервер не стартует. `BRAIN_LLM_MAX_INPUT_CHARS` — сколько символов сессии попадает
+в промпт (защита контекста и стоимости); можно не задавать, по умолчанию 24000.
 
 Если LLM не задан, сервер работает: карточки остаются heuristic, поиск работает.
 
