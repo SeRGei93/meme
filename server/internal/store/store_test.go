@@ -37,16 +37,16 @@ func TestOpenCreatesDatabaseAndAppliesMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion() error = %v", err)
 	}
-	if version != 2 {
-		t.Errorf("SchemaVersion() = %d, want 2", version)
+	if version != 3 {
+		t.Errorf("SchemaVersion() = %d, want 3", version)
 	}
 
 	health, err := st.Health(context.Background())
 	if err != nil {
 		t.Fatalf("Health() error = %v", err)
 	}
-	if health.SchemaVersion != 2 {
-		t.Errorf("Health().SchemaVersion = %d, want 2", health.SchemaVersion)
+	if health.SchemaVersion != 3 {
+		t.Errorf("Health().SchemaVersion = %d, want 3", health.SchemaVersion)
 	}
 	if !health.FTS5 {
 		t.Error("Health().FTS5 = false, want true")
@@ -74,8 +74,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion() error = %v", err)
 	}
-	if version != 2 {
-		t.Errorf("SchemaVersion() = %d, want 2", version)
+	if version != 3 {
+		t.Errorf("SchemaVersion() = %d, want 3", version)
 	}
 }
 

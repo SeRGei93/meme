@@ -11,6 +11,7 @@ import (
 	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/card"
 	"github.com/SeRGei93/meme/server/internal/ingest"
+	"github.com/SeRGei93/meme/server/internal/memory"
 	"github.com/SeRGei93/meme/server/internal/queue"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
@@ -346,5 +347,69 @@ func TestGeneratorIgnoresAJobWithoutARecord(t *testing.T) {
 
 	if err := generator.Process(context.Background(), store.Job{}); err != nil {
 		t.Fatalf("Process() error = %v", err)
+	}
+}
+
+func TestGeneratorCreatesACardForATextOnlyMemory(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "brain.db"))
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	client, _, err := st.CreateClient(ctx, "jarvis-memory", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	saved, err := st.SaveMemory(ctx, store.MemoryParams{
+		ClientID:       client.ID,
+		Source:         auth.SourceJarvis,
+		IdempotencyKey: "memory-generate",
+		Request: memory.Request{
+			ExternalID: "evt_generate",
+			RawText:    "Why does migration 004 run before 003?",
+		},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("SaveMemory() error = %v", err)
+	}
+	if saved.JobID == nil {
+		t.Fatal("SaveMemory() returned no card job")
+	}
+
+	generator := &card.Generator{
+		Store:  st,
+		Client: &fakeClient{content: generatedCardJSON()},
+		Model:  "test-model",
+		Now:    func() time.Time { return now.Add(time.Minute) },
+	}
+	if err := generator.Process(ctx, queuedJob(t, st, *saved.JobID)); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	record, err := st.GetRecord(ctx, saved.RecordID)
+	if err != nil {
+		t.Fatalf("GetRecord() error = %v", err)
+	}
+	if record.CardStatus != store.CardStatusOK {
+		t.Errorf("CardStatus = %q, want ok", record.CardStatus)
+	}
+	if record.Title != "Fix SQLite migration ordering" {
+		t.Errorf("Title = %q, want the generated card title", record.Title)
+	}
+	if record.CardModel == nil || *record.CardModel != "test-model" {
+		t.Errorf("CardModel = %v, want test-model", record.CardModel)
+	}
+
+	result, err := st.Search(ctx, store.SearchParams{Query: "quicksilver", Now: now})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ID != saved.RecordID {
+		t.Fatalf("Search(quicksilver) = %+v, want record %d", result.Items, saved.RecordID)
 	}
 }

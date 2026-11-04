@@ -67,6 +67,7 @@ func New(opts Options) http.Handler {
 	s.routes = []route{
 		{method: http.MethodGet, path: "/health", handler: s.handleHealth},
 		{method: http.MethodPost, path: ingestPath, handler: s.requireScopes(auth.ScopeIngest)(s.handleIngest)},
+		{method: http.MethodPost, path: memoriesPath, handler: s.requireScopes(auth.ScopeIngest)(s.handleCreateMemory)},
 		{method: http.MethodGet, path: recordsPath + "/", oneSegment: true, handler: s.requireScopes(auth.ScopeUI, auth.ScopeMCPRead)(s.handleGetRecord)},
 		{method: http.MethodGet, path: jobsPath, handler: s.requireScopes(auth.ScopeAdmin)(s.handleListJobs)},
 		{method: http.MethodGet, path: searchPath, handler: s.requireScopes(auth.ScopeUI, auth.ScopeMCPRead)(s.handleSearch)},
