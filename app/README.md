@@ -31,12 +31,13 @@ open app/SecondBrain.xcodeproj
 - `SecondBrainUITests` — UI smoke test.
 
 UI-тесты запускают отдельный runner и требуют подписанной сборки с выбранным
-Team. Без подписи используйте unit-тесты:
+Team. В `project.yml` уже указан Personal Team; на другой машине выберите свой
+Team в Signing & Capabilities.
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project app/SecondBrain.xcodeproj -scheme SecondBrain \
-  -destination 'platform=macOS' test -only-testing:SecondBrainTests
+  -destination 'platform=macOS' test
 ```
 
 Закрытие окна не завершает приложение: оно остаётся в menu bar. Выход — через
@@ -45,6 +46,8 @@ menu bar или кнопку Quit.
 ## Подпись и sandbox
 
 - Bundle id: `com.serg.secondbrain`.
+- Team в `project.yml` — `9NYF3M7567` (Personal Team). Для другого аккаунта
+  поменяйте `DEVELOPMENT_TEAM` и перегенерируйте проект.
 - Hardened Runtime включён, App Sandbox выключен (нужен доступ к
   `~/.config/opencode` и `~/.config/second-brain`).
 - Launch at login — `SMAppService.mainApp`; при первом включении macOS может
