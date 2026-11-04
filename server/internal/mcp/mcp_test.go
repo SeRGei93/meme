@@ -70,6 +70,9 @@ func TestParseRejectsMalformedInput(t *testing.T) {
 		{"wrong version", `{"jsonrpc":"1.0","id":1,"method":"ping"}`, mcp.CodeInvalidRequest},
 		{"missing method", `{"jsonrpc":"2.0","id":1}`, mcp.CodeInvalidRequest},
 		{"scalar", `5`, mcp.CodeInvalidRequest},
+		{"wrong jsonrpc type", `{"jsonrpc":2,"id":1,"method":"ping"}`, mcp.CodeInvalidRequest},
+		{"wrong method type", `{"jsonrpc":"2.0","id":1,"method":5}`, mcp.CodeInvalidRequest},
+		{"object id", `{"jsonrpc":"2.0","id":{},"method":"ping"}`, mcp.CodeInvalidRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -43,19 +43,19 @@ func (s *server) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	request, protocolErr := mcp.Parse(body)
 	if protocolErr != nil {
-		writeJSON(w, http.StatusOK, protocolErr)
-		return
-	}
-
-	// Notifications never receive a JSON-RPC response.
-	if request.IsNotification() {
-		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, http.StatusBadRequest, protocolErr)
 		return
 	}
 
 	principal, _ := principalFrom(r.Context())
 	source, ok := s.knowledgeSource(w, r, principal)
 	if !ok {
+		return
+	}
+
+	// Notifications never receive a JSON-RPC response.
+	if request.IsNotification() {
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
@@ -106,6 +106,26 @@ func decodeToolArguments(raw json.RawMessage, target any) *mcp.ToolError {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return &mcp.ToolError{Code: "validation_failed", Message: "arguments: unexpected trailing data"}
+	}
+	return nil
+}
+
+// rejectNullArguments closes the gap between "field omitted" and an explicit
+// JSON null: the published schemas do not allow null, while Go pointers decode
+// both to nil.
+func rejectNullArguments(raw json.RawMessage, fields ...string) *mcp.ToolError {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil // decodeToolArguments reports the shape error
+	}
+	for _, field := range fields {
+		value, ok := args[field]
+		if ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return validationError(field, "must not be null")
+		}
 	}
 	return nil
 }

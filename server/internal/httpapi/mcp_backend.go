@@ -52,6 +52,9 @@ func (b mcpBackend) Search(ctx context.Context, _ mcp.CallContext, raw json.RawM
 	if toolErr := decodeToolArguments(raw, &args); toolErr != nil {
 		return nil, toolErr
 	}
+	if toolErr := rejectNullArguments(raw, "limit", "project", "source"); toolErr != nil {
+		return nil, toolErr
+	}
 
 	query := strings.TrimSpace(args.Query)
 	if runeLen(query) < 1 || runeLen(query) > 500 {
@@ -120,6 +123,9 @@ func (b mcpBackend) GetRecord(ctx context.Context, _ mcp.CallContext, raw json.R
 func (b mcpBackend) Remember(ctx context.Context, call mcp.CallContext, raw json.RawMessage) (any, *mcp.ToolError) {
 	var args rememberArguments
 	if toolErr := decodeToolArguments(raw, &args); toolErr != nil {
+		return nil, toolErr
+	}
+	if toolErr := rejectNullArguments(raw, "text", "title", "summary", "project", "tags", "external_id", "occurred_at"); toolErr != nil {
 		return nil, toolErr
 	}
 
@@ -208,6 +214,9 @@ func rememberRequest(args rememberArguments) (memory.Request, *mcp.ToolError) {
 func (b mcpBackend) ListProjects(ctx context.Context, _ mcp.CallContext, raw json.RawMessage) (any, *mcp.ToolError) {
 	var args listProjectsArguments
 	if toolErr := decodeToolArguments(raw, &args); toolErr != nil {
+		return nil, toolErr
+	}
+	if toolErr := rejectNullArguments(raw, "limit"); toolErr != nil {
 		return nil, toolErr
 	}
 	limit := store.DefaultProjectLimit

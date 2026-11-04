@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/SeRGei93/meme/server/internal/auth"
@@ -141,10 +142,20 @@ func Parse(body []byte) (Request, *Response) {
 
 	var req Request
 	if err := json.Unmarshal(trimmed, &req); err != nil {
-		return Request{}, errorResponse(CodeParseError, "parse error: "+err.Error())
+		var syntax *json.SyntaxError
+		if errors.As(err, &syntax) {
+			return Request{}, errorResponse(CodeParseError, "parse error: "+err.Error())
+		}
+		return Request{}, errorResponse(CodeInvalidRequest, "invalid request: "+err.Error())
 	}
 	if req.JSONRPC != "2.0" || req.Method == "" {
 		return Request{}, errorResponse(CodeInvalidRequest, "invalid request: jsonrpc must be 2.0 and method is required")
+	}
+	if id := bytes.TrimSpace(req.ID); len(id) > 0 && !bytes.Equal(id, []byte("null")) {
+		// JSON-RPC ids are strings, numbers or null; anything else is invalid.
+		if id[0] != '"' && id[0] != '-' && (id[0] < '0' || id[0] > '9') {
+			return Request{}, errorResponse(CodeInvalidRequest, "invalid request: id must be a string, number or null")
+		}
 	}
 	return req, nil
 }

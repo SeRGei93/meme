@@ -84,6 +84,10 @@ func TestMCPAuthAndScopes(t *testing.T) {
 	if rec := mcpDo(t, env, uiToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}); rec.Code != http.StatusForbidden {
 		t.Errorf("ui token status = %d, want 403", rec.Code)
 	}
+	uiWithMCP := createClient(t, env, "ui-mcp", "ui", []string{"mcp:read"})
+	if rec := mcpDo(t, env, uiWithMCP.Token, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"}); rec.Code != http.StatusForbidden {
+		t.Errorf("ui token with mcp:read status = %d, want 403", rec.Code)
+	}
 	if rec := mcpDo(t, env, testAdminToken, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"}); rec.Code != http.StatusForbidden {
 		t.Errorf("bootstrap token status = %d, want 403", rec.Code)
 	}
@@ -288,16 +292,27 @@ func TestMCPProtocolAndArgumentErrors(t *testing.T) {
 	token := createClientToken(t, env, "jarvis", "jarvis", []string{"mcp:read", "mcp:write"})
 
 	malformed := env.doRaw(t, http.MethodPost, "/mcp", token, "application/json", bytes.NewReader([]byte(`{`)))
-	if malformed.Code != http.StatusOK {
-		t.Fatalf("malformed status = %d, want 200", malformed.Code)
+	if malformed.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status = %d, want 400", malformed.Code)
 	}
 	if code := int(mcpBody(t, malformed)["error"].(map[string]any)["code"].(float64)); code != -32700 {
 		t.Errorf("malformed code = %d, want -32700", code)
 	}
 
 	batch := env.doRaw(t, http.MethodPost, "/mcp", token, "application/json", bytes.NewReader([]byte(`[]`)))
+	if batch.Code != http.StatusBadRequest {
+		t.Errorf("batch status = %d, want 400", batch.Code)
+	}
 	if code := int(mcpBody(t, batch)["error"].(map[string]any)["code"].(float64)); code != -32600 {
 		t.Errorf("batch code = %d, want -32600", code)
+	}
+
+	scalar := env.doRaw(t, http.MethodPost, "/mcp", token, "application/json", bytes.NewReader([]byte(`5`)))
+	if scalar.Code != http.StatusBadRequest {
+		t.Errorf("scalar status = %d, want 400", scalar.Code)
+	}
+	if code := int(mcpBody(t, scalar)["error"].(map[string]any)["code"].(float64)); code != -32600 {
+		t.Errorf("scalar code = %d, want -32600", code)
 	}
 
 	unknownMethod := mcpDo(t, env, token, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
@@ -315,13 +330,21 @@ func TestMCPProtocolAndArgumentErrors(t *testing.T) {
 		{"query": "x", "unknown": true},
 		{"query": "x", "limit": 51},
 		{"query": "x", "limit": 0},
+		{"query": "x", "limit": nil},
 		{"query": "x", "project": ""},
+		{"query": "x", "project": nil},
 		{"query": "x", "source": "other"},
+		{"query": "x", "source": nil},
 	} {
 		rec := mcpDo(t, env, token, toolCallPayload(3, "search", args))
 		result := mcpResult(t, rec)
 		if result["isError"] != true {
 			t.Errorf("search args %v did not fail: %q", args, rec.Body.String())
+			continue
+		}
+		errorCode := result["structuredContent"].(map[string]any)["error"].(map[string]any)["code"]
+		if errorCode != "validation_failed" {
+			t.Errorf("search args %v error code = %v, want validation_failed", args, errorCode)
 		}
 	}
 
