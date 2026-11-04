@@ -1,4 +1,5 @@
 import { hostname as osHostname } from 'node:os';
+import { runBackfill } from './backfill.ts';
 import { createCapture, type WriteBundle } from './capture.ts';
 import { loadConfig, type PluginConfig } from './config.ts';
 import type { StorageLike } from './cursor.ts';
@@ -10,6 +11,15 @@ import type { SessionInfoLike, SessionMessageLike } from './types.ts';
 export interface SetupSession {
   get(input: { sessionID: string }): Promise<SessionInfoLike>;
   context(input: { sessionID: string }): Promise<readonly SessionMessageLike[]>;
+  /** Present on real OpenCode contexts; older adapters may omit it. */
+  list?(input: {
+    directory?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    data: readonly SessionInfoLike[];
+    cursor?: { next?: string | null };
+  }>;
   hook(
     name: 'compaction',
     callback: (event: { sessionID: string }) => Promise<void>,
@@ -37,6 +47,11 @@ export interface SetupOptions {
   readonly uuid?: () => string;
   readonly write?: WriteBundle;
   readonly onError?: (error: unknown) => void;
+  readonly backfill?: {
+    readonly enabled?: boolean;
+    readonly pageSize?: number;
+    readonly throttleMs?: number;
+  };
 }
 
 export type Cleanup = () => Promise<void>;
@@ -91,6 +106,24 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
   });
 
   const controller = new AbortController();
+  const listSessions = ctx.session.list?.bind(ctx.session);
+  const backfillTask =
+    options.backfill?.enabled === false || !listSessions
+      ? Promise.resolve()
+      : runBackfill({
+          sessions: { list: (input) => listSessions(input) },
+          capture,
+          storage: ctx.storage,
+          directory: ctx.location.directory,
+          pageSize: options.backfill?.pageSize,
+          throttleMs: options.backfill?.throttleMs,
+          signal: controller.signal,
+          onError,
+        }).then(
+          () => undefined,
+          (error: unknown) => onError(error),
+        );
+
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({
@@ -109,7 +142,11 @@ export async function setupPlugin(ctx: SetupContext, options: SetupOptions = {})
     try {
       await compactionHook.dispose();
     } finally {
-      await router.dispose();
+      try {
+        await router.dispose();
+      } finally {
+        await backfillTask;
+      }
     }
   };
 }

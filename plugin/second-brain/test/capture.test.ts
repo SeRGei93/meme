@@ -166,6 +166,19 @@ test('writes a final bundle after a later live capture of the same session', asy
   assert.equal(h.writes[2]?.bundle.final, true);
 });
 
+test('concurrent captures of one session write a single bundle', async () => {
+  const h = harness();
+  const capture = createCapture(h.deps);
+
+  const results = await Promise.all([
+    capture.capture('ses_01JABCDEF', { final: false }),
+    capture.capture('ses_01JABCDEF', { final: false }),
+  ]);
+
+  assert.deepEqual(results.map((result) => result.written).sort(), [false, true]);
+  assert.equal(h.writes.length, 1);
+});
+
 test('uses opencode:<projectID> when no git remote is found', async () => {
   const h = harness({ deps: { findRemote: async () => undefined } });
   const capture = createCapture(h.deps);
