@@ -54,7 +54,7 @@ final class DashboardModel {
             self.stats = stats
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
-            self.error = message(for: error)
+            self.error = ErrorDisplay.message(for: error)
         }
 
         do {
@@ -63,7 +63,7 @@ final class DashboardModel {
             self.failedJobs = jobs.items
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
-            self.jobsError = message(for: error)
+            self.jobsError = ErrorDisplay.message(for: error)
         }
 
         guard generation == self.generation else { return }
@@ -75,7 +75,4 @@ final class DashboardModel {
         await load()
     }
 
-    private func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-    }
 }

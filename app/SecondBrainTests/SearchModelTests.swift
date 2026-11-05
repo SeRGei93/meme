@@ -368,17 +368,6 @@ final class SearchModelTests: XCTestCase {
         )
     }
 
-    private func waitUntil(
-        timeout: TimeInterval = 2,
-        _ condition: @escaping @MainActor () -> Bool
-    ) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("condition was not met within \(timeout) s")
-    }
 }
 
 private final class LockedCounter: @unchecked Sendable {

@@ -39,6 +39,8 @@ struct ContentView: View {
             }
         case .agents:
             AgentsView()
+        case .graph:
+            GraphView()
         }
     }
 }

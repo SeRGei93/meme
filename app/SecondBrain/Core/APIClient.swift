@@ -81,6 +81,27 @@ struct APIClient: Sendable {
         try await send(path: "api/v1/stats")
     }
 
+    /// Memory graph for the graph screen. `projectKey` is applied server-side so
+    /// a filtered project still sees more than the newest records of the whole
+    /// database; `minWeight` drops weak links.
+    func graph(
+        projectKey: String? = nil,
+        limit: Int? = nil,
+        minWeight: Double? = nil
+    ) async throws -> MemoryGraph {
+        var items: [URLQueryItem] = []
+        if let projectKey, !projectKey.isEmpty {
+            items.append(URLQueryItem(name: "project_key", value: projectKey))
+        }
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let minWeight {
+            items.append(URLQueryItem(name: "min_weight", value: String(minWeight)))
+        }
+        return try await send(path: "api/v1/graph", query: items)
+    }
+
     /// Admin-scoped ingestion queue. `failed` powers the dashboard error list;
     /// an unfiltered page lets the agents screen find the latest job per source.
     func jobs(

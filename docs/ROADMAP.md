@@ -413,11 +413,11 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] OpenCode: last capture, plugin status;
   - [x] Jarvis: last memory, token status;
   - [x] очередь.
-- [ ] Graph:
-  - [ ] Canvas + force-directed layout;
-  - [ ] узлы/связи;
-  - [ ] фильтры;
-  - [ ] клик → карточка.
+- [x] Graph:
+  - [x] Canvas + force-directed layout;
+  - [x] узлы/связи;
+  - [x] фильтры;
+  - [x] клик → карточка.
 - [x] Settings:
   - [x] server URL;
   - [x] токены;

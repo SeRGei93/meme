@@ -68,7 +68,7 @@ final class AgentsModel {
             guard generation == self.generation, !Task.isCancelled else { return }
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
-            self.error = message(for: error)
+            self.error = ErrorDisplay.message(for: error)
             isLoading = false
             return
         }
@@ -79,7 +79,7 @@ final class AgentsModel {
             guard generation == self.generation, !Task.isCancelled else { return }
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
-            clientsError = message(for: error)
+            clientsError = ErrorDisplay.message(for: error)
         }
 
         var jobs: [IngestJob] = []
@@ -89,7 +89,7 @@ final class AgentsModel {
                 guard generation == self.generation, !Task.isCancelled else { return }
             } catch {
                 guard generation == self.generation, !Task.isCancelled else { return }
-                jobsError = message(for: error)
+                jobsError = ErrorDisplay.message(for: error)
             }
         }
 
@@ -158,7 +158,4 @@ final class AgentsModel {
         )
     }
 
-    private func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-    }
 }

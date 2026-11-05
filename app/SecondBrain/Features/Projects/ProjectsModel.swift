@@ -57,8 +57,7 @@ final class ProjectsModel {
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
             projects = []
-            self.error = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
+            self.error = ErrorDisplay.message(for: error)
         }
 
         guard generation == self.generation else { return }

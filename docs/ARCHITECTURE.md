@@ -456,6 +456,7 @@ app/
         AppSidebarView.swift
         AppSection.swift
         DashboardPanel.swift
+        SourceStyle.swift
         StatusRowView.swift
         StatusComponents.swift
         UploadQueueSidebarView.swift
@@ -468,6 +469,11 @@ app/
       Agents/
         AgentsView.swift
         AgentsModel.swift
+      Graph/
+        GraphView.swift
+        GraphModel.swift
+        GraphCanvasView.swift
+        GraphLayout.swift
       Onboarding/
         OnboardingView.swift
       Search/
@@ -481,6 +487,7 @@ app/
       APIModels.swift
       RawTextSearch.swift
       DateDisplay.swift
+      ErrorDisplay.swift
       APIError.swift
       KeychainStore.swift
       SpoolBundle.swift
