@@ -57,9 +57,13 @@ final class UITestURLProtocol: URLProtocol {
         case "/api/v1/jobs":
             payload = (200, Self.jobsResponse(query: query))
         case "/api/v1/clients":
-            payload = (200, Data(Self.clientsJSON.utf8))
+            payload = (200, Self.clientsResponse())
         default:
-            if path.hasPrefix("/api/v1/records/"),
+            if path.hasPrefix("/api/v1/clients/"),
+               request.httpMethod == "DELETE",
+               let id = Int64(path.split(separator: "/").last ?? "") {
+                payload = Self.revokeClient(id: id)
+            } else if path.hasPrefix("/api/v1/records/"),
                let id = Int64(path.split(separator: "/").last ?? ""),
                let record = Self.recordResponse(id: id) {
                 payload = (200, record)
@@ -403,22 +407,77 @@ final class UITestURLProtocol: URLProtocol {
             ?? Data("{}".utf8)
     }
 
-    private static let clientsJSON = """
-    {"items":[
-      {"id":1,"name":"second-brain-app","kind":"ui","scopes":["ui","admin"],
-       "source":null,"created_at":"2026-10-01T12:00:00Z",
-       "last_seen_at":null,"revoked_at":null},
-      {"id":2,"name":"opencode-macbook","kind":"agent","scopes":["ingest"],
-       "source":"opencode","created_at":"2026-10-01T12:00:00Z",
-       "last_seen_at":null,"revoked_at":null},
-      {"id":3,"name":"jarvis","kind":"agent","scopes":["ingest"],
-       "source":"jarvis","created_at":"2026-10-01T12:00:00Z",
-       "last_seen_at":null,"revoked_at":null},
-      {"id":4,"name":"claude","kind":"agent","scopes":["mcp:read","mcp:write"],
-       "source":"claude-prod","created_at":"2026-10-02T12:00:00Z",
-       "last_seen_at":null,"revoked_at":null}
-    ]}
-    """
+    // MARK: - Mutable clients
+
+    private static let clientsLock = NSLock()
+    nonisolated(unsafe) private static var clientItems: [[String: Any]] = [
+        [
+            "id": 1, "name": "second-brain-app", "kind": "ui",
+            "scopes": ["ui", "admin"], "source": NSNull(),
+            "created_at": "2026-10-01T12:00:00Z",
+            "last_seen_at": NSNull(), "revoked_at": NSNull(),
+        ],
+        [
+            "id": 2, "name": "opencode-macbook", "kind": "agent",
+            "scopes": ["ingest"], "source": "opencode",
+            "created_at": "2026-10-01T12:00:00Z",
+            "last_seen_at": NSNull(), "revoked_at": NSNull(),
+        ],
+        [
+            "id": 3, "name": "jarvis", "kind": "agent",
+            "scopes": ["ingest"], "source": "jarvis",
+            "created_at": "2026-10-01T12:00:00Z",
+            "last_seen_at": NSNull(), "revoked_at": NSNull(),
+        ],
+        [
+            "id": 4, "name": "claude", "kind": "agent",
+            "scopes": ["mcp:read", "mcp:write"], "source": "claude-prod",
+            "created_at": "2026-10-02T12:00:00Z",
+            "last_seen_at": NSNull(), "revoked_at": NSNull(),
+        ],
+    ]
+
+    private static func clientsResponse() -> Data {
+        if ProcessInfo.processInfo.environment["SECOND_BRAIN_UI_CLIENTS"] == "empty" {
+            return Data(#"{"items":[]}"#.utf8)
+        }
+        clientsLock.lock()
+        defer { clientsLock.unlock() }
+        return (try? JSONSerialization.data(
+            withJSONObject: ["items": clientItems],
+            options: [.sortedKeys]
+        )) ?? Data("{}".utf8)
+    }
+
+    private static func revokeClient(id: Int64) -> (Int, Data) {
+        clientsLock.lock()
+        defer { clientsLock.unlock() }
+        guard let index = clientItems.firstIndex(where: { clientID($0) == id }) else {
+            return (404, errorBody("not_found", "client not found"))
+        }
+        if clientItems[index]["revoked_at"] is NSNull {
+            clientItems[index]["revoked_at"] = "2026-11-06T12:00:00Z"
+        }
+        return (204, Data())
+    }
+
+    private static func clientID(_ item: [String: Any]) -> Int64? {
+        (item["id"] as? NSNumber)?.int64Value
+    }
+
+    private static func errorBody(
+        _ code: String,
+        _ message: String,
+        field: String? = nil
+    ) -> Data {
+        var payload: [String: Any] = ["code": code, "message": message]
+        if let field {
+            payload["field"] = field
+        }
+        let envelope: [String: Any] = ["error": payload]
+        return (try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]))
+            ?? Data("{}".utf8)
+    }
 
     private static let healthJSON = """
     {"status":"ok","version":"ui-test","schema_version":4,
@@ -436,4 +495,5 @@ final class UITestURLProtocol: URLProtocol {
      "database":{"status":"ok","schema_version":4,"size_bytes":2048}}
     """
 }
+
 #endif

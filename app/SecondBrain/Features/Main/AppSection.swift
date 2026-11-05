@@ -7,6 +7,7 @@ enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case dashboard
     case projects
     case agents
+    case clients
     case graph
 
     var id: String { rawValue }
@@ -17,6 +18,7 @@ enum AppSection: String, CaseIterable, Identifiable, Sendable {
         case .dashboard: return "Обзор"
         case .projects: return "Проекты"
         case .agents: return "Агенты"
+        case .clients: return "Клиенты"
         case .graph: return "Граф"
         }
     }
@@ -27,6 +29,7 @@ enum AppSection: String, CaseIterable, Identifiable, Sendable {
         case .dashboard: return "rectangle.grid.2x2"
         case .projects: return "folder"
         case .agents: return "person.2"
+        case .clients: return "key"
         case .graph: return "point.3.connected.trianglepath.dotted"
         }
     }
