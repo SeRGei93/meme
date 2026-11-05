@@ -41,12 +41,19 @@ final class AppState {
     var settingsError: String?
     var integrationBusy = false
 
+    // MARK: Upload queue
+
+    var uploadStatus = UploadStatus()
+
     private let configStore: ConfigStore
     private let keychain: KeychainStore
     private let mcpTokenFile: MCPTokenFile
     private let session: URLSession
     private let openCodeConfig: OpenCodeConfig
     private let pluginInstaller: PluginInstaller
+    private let uploadsEnabled: Bool
+    private var uploadQueue: UploadQueue?
+    private var spoolWatcher: SpoolWatcher?
     private var didBootstrap = false
 
     init(
@@ -54,7 +61,8 @@ final class AppState {
         keychain: KeychainStore = KeychainStore(),
         session: URLSession = .shared,
         openCodeDirectory: URL = OpenCodePaths.defaultDirectory(),
-        pluginSourceDirectory: URL? = PluginInstaller.defaultSourceDirectory()
+        pluginSourceDirectory: URL? = PluginInstaller.defaultSourceDirectory(),
+        uploadsEnabled: Bool = ProcessInfo.processInfo.environment["SECOND_BRAIN_DISABLE_UPLOADS"] != "1"
     ) {
         self.configStore = configStore
         self.keychain = keychain
@@ -65,7 +73,9 @@ final class AppState {
             openCodeDirectory: openCodeDirectory,
             sourceDirectory: pluginSourceDirectory
         )
+        self.uploadsEnabled = uploadsEnabled
     }
+
 
     // MARK: Lifecycle
 
@@ -84,6 +94,7 @@ final class AppState {
         if ProcessInfo.processInfo.environment["SECOND_BRAIN_SKIP_ONBOARDING"] == "1" {
             isConfigured = true
             isOnboardingPresented = false
+            startUploads()
             return
         }
         #endif
@@ -98,6 +109,9 @@ final class AppState {
 
         isConfigured = true
         isOnboardingPresented = false
+        // Start uploads before the network awaits: a cancelled view task must
+        // not leave the process without a background upload queue.
+        startUploads()
         await checkHealth(using: APIClient(baseURL: url, session: session))
         await loadStats(using: APIClient(baseURL: url, token: token, session: session))
         if requiresReauthentication {
@@ -144,6 +158,7 @@ final class AppState {
             // Installing the plugin is best effort: a permissions problem must
             // not undo a successful token rotation. Settings shows the result.
             installOpenCodeIntegration()
+            startUploads()
             return true
         } catch {
             onboardingError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -288,6 +303,7 @@ final class AppState {
             await loadStats(using: APIClient(baseURL: url, token: token, session: session))
         }
         refreshIntegrationStatus()
+        restartUploads()
         return true
     }
 
@@ -317,7 +333,98 @@ final class AppState {
         }
 
         settingsNotice = "Путь Spool сохранён"
+        restartUploads()
         return true
+    }
+
+    // MARK: - Uploads
+
+    var uploadSummary: String {
+        if uploadStatus.requiresAuthentication {
+            return "Загрузка остановлена: нужен новый токен"
+        }
+        var summary = "Очередь: \(uploadStatus.pending) · отправлено: \(uploadStatus.sent) · failed: \(uploadStatus.failed)"
+        if uploadStatus.isUploading {
+            summary += " · отправка…"
+        } else if let next = uploadStatus.nextRetryAt {
+            summary += " · повтор \(next.formatted(date: .omitted, time: .standard))"
+        }
+        return summary
+    }
+
+    func retryUploadsNow() {
+        Task { await uploadQueue?.retryNow() }
+    }
+
+    func clearFailedUploads() {
+        Task { await uploadQueue?.clearFailed() }
+    }
+
+    private func startUploads() {
+        guard uploadsEnabled, isConfigured else { return }
+        stopUploads()
+
+        let directory = URL(fileURLWithPath: spoolPathText, isDirectory: true)
+        let queue = UploadQueue(spoolDirectory: directory, client: makeUploadClient())
+        let watcher = SpoolWatcher(directory: directory) { [weak queue] in
+            Task { await queue?.trigger() }
+        }
+        uploadQueue = queue
+        spoolWatcher = watcher
+
+        do {
+            try watcher.start()
+        } catch {
+            uploadStatus.lastError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+
+        Task {
+            await queue.setStatusHandler { [weak self, weak queue] status in
+                Task { @MainActor [weak self, weak queue] in
+                    guard let queue else { return }
+                    self?.applyUploadStatus(status, from: queue)
+                }
+            }
+        }
+    }
+
+    private func stopUploads() {
+        spoolWatcher?.stop()
+        spoolWatcher = nil
+        if let queue = uploadQueue {
+            Task { await queue.shutdown() }
+        }
+        uploadQueue = nil
+    }
+
+    private func restartUploads() {
+        if isConfigured {
+            startUploads()
+        } else {
+            stopUploads()
+        }
+    }
+
+    private func makeUploadClient() -> APIClient? {
+        guard let config = try? configStore.load(),
+              let url = config.serverURL,
+              let token = try? keychain.value(for: KeychainStore.Account.opencode),
+              !token.isEmpty else {
+            return nil
+        }
+        return APIClient(baseURL: url, token: token, session: session)
+    }
+
+    private func applyUploadStatus(_ status: UploadStatus, from queue: UploadQueue) {
+        guard uploadQueue === queue else { return }
+        uploadStatus = status
+        if status.requiresAuthentication {
+            requiresReauthentication = true
+            connection = .unauthenticated
+            statusText = "Нужен новый токен"
+            isOnboardingPresented = true
+        }
     }
 
     private var tokenPathForMCP: String {

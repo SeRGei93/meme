@@ -159,6 +159,7 @@ final class SecondBrainUITests: XCTestCase {
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
+        app.launchEnvironment["SECOND_BRAIN_DISABLE_UPLOADS"] = "1"
         if let openCodeDirectory {
             app.launchEnvironment["SECOND_BRAIN_OPENCODE_DIR"] = openCodeDirectory.path
         }

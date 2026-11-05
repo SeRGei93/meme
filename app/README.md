@@ -61,6 +61,12 @@ menu bar или кнопку Quit.
   `~/.config/opencode/plugins/second-brain/`, статус и атомарная переустановка;
 - `OpenCodeConfig` — разбор JSON/JSONC и merge `mcp.servers.second-brain` в
   глобальный `opencode.json(c)` без потери чужих настроек;
+- `SpoolBundle` — строгая валидация `docs/spool.schema.json`, лимиты и тело
+  `POST /api/v1/ingest` без server-owned полей;
+- `SpoolWatcher` — `DispatchSource` на каталог spool, atomic rename,
+  существующие файлы при старте, игнор `*.tmp` и скрытых файлов;
+- `UploadQueue` — Swift actor: группировка по `external_id`, самый свежий бандл,
+  `Idempotency-Key = bundle_id`, retry с full jitter, `failed/`, счётчики;
 - `AppState` — `@Observable`-состояние подключения, ошибок и «нужен новый токен».
 
 `AppState.checkHealth(using:)` не требует токена; `loadStats(using:)` проверяет,
@@ -123,6 +129,31 @@ Settings показывает и меняет:
 Для UI-тестов и нестандартных установок доступны переменные окружения
 `SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode) и `SECOND_BRAIN_PLUGIN_SOURCE`
 (каталог с файлами плагина).
+
+## Spool watcher и UploadQueue
+
+После подключения приложение запускает watcher на каталоге из `spool_dir`
+(по умолчанию `~/.config/second-brain/spool`):
+
+1. при старте и на каждое изменение (включая atomic rename `*.tmp -> *.json`)
+   watcher будит `UploadQueue`;
+2. очередь валидирует бандлы по `docs/spool.schema.json` и лимитам (10 MiB,
+   10 000 сообщений, 200 000 символов в сообщении);
+3. бандлы группируются по `external_id`; отправляется самый свежий
+   (`updated_at`), после успеха вся группа удаляется из spool;
+4. `Idempotency-Key` всегда `bundle_id`, поэтому retry после timeout/5xx
+   переигрывает запрос, а не создаёт дубль;
+5. любой `2xx` — удалить; `401/403` — остановить очередь и показать «нужен
+   новый токен»; `408/425/429/5xx/network` — оставить и повторить с exponential
+   backoff и `Retry-After`; остальные `4xx` и невалидные бандлы — в
+   `spool/failed/`. Если сервер отверг самый свежий бандл сессии, вся группа
+   уходит в `failed/`, чтобы старая версия не перезаписала запись;
+6. если сервер выключен, файлы остаются; при восстановлении или при
+   `Отправить сейчас` очередь досылает их.
+
+В главном окне видны pending/sent/failed, последняя ошибка, кнопки
+«Отправить сейчас» и «Очистить failed». При старте подхватываются файлы,
+накопленные при закрытом приложении.
 
 ## Подпись и sandbox
 
