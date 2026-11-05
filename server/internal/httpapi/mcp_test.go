@@ -13,8 +13,13 @@ import (
 
 func mcpDo(t *testing.T, env *testEnv, token string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
-	return env.doRaw(t, http.MethodPost, "/mcp", token, "application/json",
-		bytes.NewReader(mustJSON(t, payload)))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(mustJSON(t, payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+	return rec
 }
 
 func mcpBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {

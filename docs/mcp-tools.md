@@ -2,7 +2,8 @@
 
 > Статус: контракт v1, заморожен  
 > Транспорт: MCP Streamable HTTP, endpoint `POST /mcp`  
-> Связанные документы: [openapi.yaml](openapi.yaml), [CONTRACTS.md](CONTRACTS.md)
+> Связанные документы: [openapi.yaml](openapi.yaml), [CONTRACTS.md](CONTRACTS.md),
+> [инструкция для Jarvis](jarvis.md)
 
 ## 1. Подключение
 
