@@ -65,6 +65,30 @@ struct APIClient: Sendable {
         try await send(path: "api/v1/stats")
     }
 
+    // MARK: - Ingest
+
+    /// Uploads one spool bundle. `Idempotency-Key` is always the bundle id, so a
+    /// retry after a timeout or a 5xx replays instead of creating a duplicate.
+    func ingest(_ bundle: SpoolBundle) async throws -> IngestResponse? {
+        let body = try bundle.ingestBody()
+        let request = try makeRequest(
+            path: "api/v1/ingest",
+            method: "POST",
+            query: [],
+            body: body,
+            authenticated: true,
+            extraHeaders: ["Idempotency-Key": bundle.idempotencyKey]
+        )
+        let (http, data) = try await perform(request)
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.mapError(status: http.statusCode, headers: http.allHeaderFields, body: data)
+        }
+        // The upload queue only needs the status code: any 2xx means the
+        // bundle is safely stored (a replay is just as good). An older server
+        // or a proxy without a JSON body must not keep the file forever.
+        return try? Self.decoder.decode(IngestResponse.self, from: data)
+    }
+
     // MARK: - Clients (admin)
 
     func listClients() async throws -> ClientList {
@@ -87,10 +111,12 @@ struct APIClient: Sendable {
         method: String = "GET",
         query: [URLQueryItem] = [],
         body: Data? = nil,
-        authenticated: Bool = true
+        authenticated: Bool = true,
+        extraHeaders: [String: String] = [:]
     ) async throws -> Response {
         let request = try makeRequest(
-            path: path, method: method, query: query, body: body, authenticated: authenticated
+            path: path, method: method, query: query, body: body,
+            authenticated: authenticated, extraHeaders: extraHeaders
         )
         let (http, data) = try await perform(request)
 
@@ -140,7 +166,8 @@ struct APIClient: Sendable {
         method: String,
         query: [URLQueryItem],
         body: Data?,
-        authenticated: Bool
+        authenticated: Bool,
+        extraHeaders: [String: String] = [:]
     ) throws -> URLRequest {
         let url = configuration.baseURL.appendingPathComponent(path)
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
@@ -165,6 +192,9 @@ struct APIClient: Sendable {
                 throw APIError.unauthorized(requestID: nil)
             }
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
         }
         return request
     }

@@ -107,6 +107,22 @@ struct SearchResponse: Codable, Equatable, Sendable {
     let limit: Int
 }
 
+// MARK: - Ingest
+
+struct IngestResponse: Codable, Equatable, Sendable {
+    let recordID: Int64
+    let jobID: Int64?
+    let status: String
+    let replayed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case recordID = "record_id"
+        case jobID = "job_id"
+        case status
+        case replayed
+    }
+}
+
 // MARK: - Projects
 
 struct Project: Codable, Equatable, Sendable, Identifiable {

@@ -461,6 +461,7 @@ app/
     Core/
       APIClient.swift
       KeychainStore.swift
+      SpoolBundle.swift
       SpoolWatcher.swift
       UploadQueue.swift
       ConfigStore.swift

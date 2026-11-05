@@ -228,6 +228,44 @@ final class AppStateIntegrationTests: XCTestCase {
         XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_opencode_1")
     }
 
+    func testBootstrapUploadsExistingSpoolFiles() async throws {
+        let serverURL = URL(string: "https://brain.example.test")!
+        try ConfigStore(directory: configDirectory).save(AppConfig(serverURL: serverURL))
+        try keychain.setValue("sb_ui_test", for: KeychainStore.Account.ui)
+        try keychain.setValue("sb_opencode_test", for: KeychainStore.Account.opencode)
+        let spool = configDirectory.appendingPathComponent("spool", isDirectory: true)
+        let bundle = try SpoolFixtures.write(SpoolFixtures.bundleData(), to: spool)
+        StubURLProtocol.setHandler { request in
+            switch request.url?.path {
+            case "/health":
+                return .init(body: Data(Fixtures.healthJSON.utf8))
+            case "/api/v1/stats":
+                return .init(body: Data(Fixtures.statsJSON.utf8))
+            case "/api/v1/ingest":
+                return .init(
+                    status: 202,
+                    body: Data(#"{"record_id":1,"job_id":1,"status":"queued","replayed":false}"#.utf8)
+                )
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+        let state = makeState()
+
+        await state.bootstrap()
+
+        for _ in 0..<100 {
+            if !FileManager.default.fileExists(atPath: bundle.path),
+               state.uploadStatus.sent == 1 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bundle.path))
+        XCTAssertEqual(state.uploadStatus.sent, 1)
+        XCTAssertEqual(state.uploadStatus.pending, 0)
+    }
+
     func testConnectStillSucceedsWhenThePluginPayloadIsMissing() async throws {
         StubOnboardingServer.install()
         let state = makeState(source: root.appendingPathComponent("missing", isDirectory: true))
