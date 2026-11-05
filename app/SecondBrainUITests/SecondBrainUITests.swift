@@ -6,12 +6,79 @@ final class SecondBrainUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    override func tearDownWithError() throws {
+        // Some tests intentionally leave the app running (menu-bar behaviour).
+        // Terminate it so the next test starts with a fresh window instead of
+        // attaching to an instance whose main window was closed.
+        let app = XCUIApplication()
+        if app.state != .notRunning {
+            app.terminate()
+        }
+        try super.tearDownWithError()
+    }
+
     func testLaunchShowsMainWindow() throws {
         let app = configuredApp()
         app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Second Brain"].waitForExistence(timeout: 5))
+    }
+
+    func testUploadQueueShowsCountersEmptyStateAndRetryAction() throws {
+        let app = configuredApp()
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["upload.empty"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["upload.pendingValue"].exists)
+        XCTAssertTrue(app.staticTexts["upload.sentValue"].exists)
+        XCTAssertTrue(app.staticTexts["upload.failedValue"].exists)
+        XCTAssertTrue(app.buttons["main.retryUploads"].exists)
+        XCTAssertFalse(
+            app.buttons["main.clearFailed"].exists,
+            "clear failed should only appear when there is something to clear"
+        )
+
+        let state = app.staticTexts["upload.state"]
+        XCTAssertTrue(state.waitForExistence(timeout: 5))
+        XCTAssertEqual(state.value as? String, "Очередь пуста")
+    }
+
+    func testUploadQueueShowsAndClearsFailedBundles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-upload-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        let spool = configDirectory.appendingPathComponent("spool", isDirectory: true)
+        try FileManager.default.createDirectory(at: spool, withIntermediateDirectories: true)
+        let config: [String: Any] = ["server_url": "https://127.0.0.1:9"]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        try Data("{not json".utf8).write(to: spool.appendingPathComponent("broken.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = configuredApp(configDirectory: configDirectory, uploadsEnabled: true)
+        app.launch()
+
+        let failed = app.staticTexts["upload.failedValue"]
+        XCTAssertTrue(failed.waitForExistence(timeout: 10))
+        let oneFailure = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Ошибки: 1"),
+            object: failed
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [oneFailure], timeout: 10), .completed)
+        XCTAssertTrue(app.staticTexts["upload.error"].waitForExistence(timeout: 5))
+
+        let clear = app.buttons["main.clearFailed"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.click()
+
+        XCTAssertTrue(app.staticTexts["upload.empty"].waitForExistence(timeout: 10))
+        XCTAssertEqual(failed.value as? String, "Ошибки: 0")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: spool.appendingPathComponent("failed/broken.json").path
+            )
+        )
     }
 
     func testSettingsOpens() throws {
@@ -125,10 +192,23 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertEqual(entry["url"] as? String, "https://brain.example.test/mcp")
         XCTAssertEqual(entry["oauth"] as? Bool, false)
         let headers = try XCTUnwrap(entry["headers"] as? [String: Any])
-        XCTAssertEqual(
-            headers["Authorization"] as? String,
-            "Bearer {file:\(configDirectory.appendingPathComponent("mcp_token").path)}"
+        let authorization = try XCTUnwrap(headers["Authorization"] as? String)
+        let tokenPath = configDirectory.appendingPathComponent("mcp_token").path
+        XCTAssertTrue(authorization.hasPrefix("Bearer {file:"))
+        XCTAssertTrue(authorization.hasSuffix("}"))
+        let embeddedPath = String(
+            authorization.dropFirst("Bearer {file:".count).dropLast()
         )
+        if embeddedPath.hasPrefix("~") {
+            // The app abbreviates paths under its home directory, which can
+            // differ from the UI-test runner's home.
+            XCTAssertTrue(
+                tokenPath.hasSuffix(String(embeddedPath.dropFirst())),
+                "auth header points to \(embeddedPath), expected \(tokenPath)"
+            )
+        } else {
+            XCTAssertEqual(embeddedPath, tokenPath)
+        }
 
         let reinstall = settings.buttons["settings.installPlugin"]
         let readyToReinstall = XCTNSPredicateExpectation(
@@ -155,11 +235,14 @@ final class SecondBrainUITests: XCTestCase {
     private func configuredApp(
         openCodeDirectory: URL? = nil,
         pluginSource: URL? = nil,
-        configDirectory: URL? = nil
+        configDirectory: URL? = nil,
+        uploadsEnabled: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
-        app.launchEnvironment["SECOND_BRAIN_DISABLE_UPLOADS"] = "1"
+        if !uploadsEnabled {
+            app.launchEnvironment["SECOND_BRAIN_DISABLE_UPLOADS"] = "1"
+        }
         if let openCodeDirectory {
             app.launchEnvironment["SECOND_BRAIN_OPENCODE_DIR"] = openCodeDirectory.path
         }

@@ -266,6 +266,37 @@ final class AppStateIntegrationTests: XCTestCase {
         XCTAssertEqual(state.uploadStatus.pending, 0)
     }
 
+    func testBootstrapSurfacesAWatcherSetupError() async throws {
+        let serverURL = URL(string: "https://brain.example.test")!
+        let spoolFile = root.appendingPathComponent("spool-is-a-file", isDirectory: false)
+        try Data("not a directory".utf8).write(to: spoolFile)
+        try ConfigStore(directory: configDirectory).save(
+            AppConfig(serverURL: serverURL, spoolDir: spoolFile.path)
+        )
+        try keychain.setValue("sb_ui_test", for: KeychainStore.Account.ui)
+        StubURLProtocol.setHandler { request in
+            switch request.url?.path {
+            case "/health":
+                return .init(body: Data(Fixtures.healthJSON.utf8))
+            case "/api/v1/stats":
+                return .init(body: Data(Fixtures.statsJSON.utf8))
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+        let state = makeState()
+
+        await state.bootstrap()
+
+        for _ in 0..<100 where state.uploadStatus.lastError == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(
+            state.uploadStatus.lastError?.contains("не является каталогом") == true,
+            "watcher setup errors must not be erased by the queue's initial publish"
+        )
+    }
+
     func testConnectStillSucceedsWhenThePluginPayloadIsMissing() async throws {
         StubOnboardingServer.install()
         let state = makeState(source: root.appendingPathComponent("missing", isDirectory: true))

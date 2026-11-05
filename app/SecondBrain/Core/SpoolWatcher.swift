@@ -41,7 +41,14 @@ final class SpoolWatcher: @unchecked Sendable {
     func start() throws {
         try queue.sync {
             stopped = false
-            try arm()
+            do {
+                try arm()
+            } catch {
+                // A failed start must not look like a running watcher: a later
+                // start() after the path is fixed has to try again.
+                stopped = true
+                throw error
+            }
         }
 
         // Pick up bundles that were written while the app was not running.

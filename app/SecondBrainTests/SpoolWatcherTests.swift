@@ -41,6 +41,18 @@ final class SpoolWatcherTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
     }
 
+    func testStartOnARegularFileThrowsAndCanRetryAfterItBecomesADirectory() throws {
+        try Data("not a directory".utf8).write(to: directory)
+        let watcher = SpoolWatcher(directory: directory) {}
+        defer { watcher.stop() }
+
+        XCTAssertThrowsError(try watcher.start())
+
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        XCTAssertNoThrow(try watcher.start())
+    }
+
     func testStartPicksUpExistingFiles() throws {
         let expectation = expectation(description: "initial scan")
         let watcher = SpoolWatcher(directory: directory) {
