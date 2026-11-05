@@ -20,6 +20,10 @@ struct SearchWorkspaceView: View {
         .onAppear {
             model.setClient(appState.makeReadClient())
             model.ensureProjectsLoaded()
+            if let stats = appState.stats {
+                model.setSourceCounts(stats.records.bySource)
+            }
+            model.refreshSources()
             if appState.consumeSearchFocusRequest() {
                 searchFocused = true
             }
@@ -165,9 +169,9 @@ struct SearchWorkspaceView: View {
             .help("Фильтр по проекту")
 
             Picker("Источник", selection: $model.source) {
-                Text("Все источники").tag(MemorySource?.none)
-                ForEach(MemorySource.allCases) { source in
-                    Text(source.title).tag(Optional(source))
+                Text("Все источники").tag(String?.none)
+                ForEach(model.sourceOptions) { option in
+                    Text(option.label).tag(Optional(option.source))
                 }
             }
             .pickerStyle(.menu)
@@ -224,7 +228,7 @@ private struct SearchResultsPane: View {
                     systemImage: model.projectKey == nil ? "magnifyingglass" : "folder",
                     title: model.projectKey == nil ? "Найдите в памяти" : "Поиск по проекту",
                     message: model.projectKey == nil
-                        ? "Введите запрос, чтобы найти решения, вопросы и заметки из OpenCode и Jarvis."
+                        ? "Введите запрос, чтобы найти решения, вопросы и заметки из памяти агентов."
                         : "Фильтр «\(model.selectedProject?.name ?? model.projectKey ?? "")» применён. Введите запрос, чтобы найти записи этого проекта.",
                     identifier: "search.idle"
                 )

@@ -78,40 +78,61 @@ final class GraphModelTests: XCTestCase {
         XCTAssertFalse(model.isTruncated)
     }
 
-    func testSourceFilterRemovesNodesAndDanglingEdges() async throws {
+    func testSourceFilterIsSentToTheServerAndReturnsOneSource() async throws {
+        var seenSource: String?
         StubURLProtocol.setHandler { request in
             if request.url?.path == "/api/v1/projects" {
                 return .init(body: try SearchFixtures.projectsData([]))
             }
+            if request.url?.path == "/api/v1/stats" {
+                return .init(body: StatusFixtures.statsData(
+                    sources: ["opencode": 2, "jarvis": 1]
+                ))
+            }
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            seenSource = components.queryItems?.first { $0.name == "source" }?.value
+            let nodes: [[String: Any]]
+            if seenSource == "jarvis" {
+                nodes = [
+                    GraphFixtures.node(
+                        id: 2,
+                        title: "Jarvis note",
+                        projectKey: "jarvis",
+                        source: "jarvis",
+                        kind: "memory"
+                    )
+                ]
+            } else {
+                nodes = [
+                    GraphFixtures.node(id: 1, title: "OpenCode note"),
+                    GraphFixtures.node(
+                        id: 2,
+                        title: "Jarvis note",
+                        projectKey: "jarvis",
+                        source: "jarvis",
+                        kind: "memory"
+                    ),
+                ]
+            }
+            let edges = seenSource == nil ? [GraphFixtures.edge(from: 1, to: 2)] : []
             return .init(
-                body: GraphFixtures.graphData(
-                    nodes: [
-                        GraphFixtures.node(id: 1, title: "OpenCode note"),
-                        GraphFixtures.node(
-                            id: 2,
-                            title: "Jarvis note",
-                            projectKey: "jarvis",
-                            source: "jarvis",
-                            kind: "memory"
-                        ),
-                    ],
-                    edges: [GraphFixtures.edge(from: 1, to: 2)]
-                )
+                body: GraphFixtures.graphData(nodes: nodes, edges: edges)
             )
         }
 
         let model = GraphModel(client: client())
+        model.source = "jarvis"
         await model.load()
-        XCTAssertEqual(model.visualNodes.count, 2)
-        XCTAssertEqual(model.visualEdges.count, 1)
 
-        model.source = .jarvis
-
+        XCTAssertEqual(seenSource, "jarvis")
         XCTAssertEqual(model.nodes.map(\.id), [2])
         XCTAssertEqual(model.visualNodes.map(\.id), [2])
         XCTAssertTrue(model.visualEdges.isEmpty)
-        XCTAssertEqual(model.count(for: .opencode), 1)
-        XCTAssertEqual(model.count(for: .jarvis), 1)
+        XCTAssertEqual(model.sourceOptions.map(\.source), ["jarvis", "opencode"])
+        XCTAssertEqual(model.count(for: "jarvis"), 1)
+        XCTAssertEqual(model.count(for: "opencode"), 2)
     }
 
     func testGraphFailureShowsTheErrorPaneAndRetryRecovers() async throws {

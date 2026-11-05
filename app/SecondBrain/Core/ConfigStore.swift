@@ -20,7 +20,8 @@ struct AppConfig: Codable, Equatable, Sendable {
     var maxMessages: Int?
     var maxToolCallsPerMessage: Int?
     var maxToolFieldChars: Int?
-    /// Role (`opencode`, `jarvis`, `ui`) → client created by this installation.
+    /// Role (`opencode`, `ui`) → client created by this installation. Remote
+    /// agents keep their tokens in their own secret store, not here.
     var appClients: [String: StoredClient]?
     /// Ids whose revocation failed; retried on the next onboarding run.
     var pendingRevocations: [Int64]?

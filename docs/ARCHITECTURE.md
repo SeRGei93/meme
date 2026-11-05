@@ -289,7 +289,7 @@ flowchart TB
 | Компонент | Ответственность |
 |---|---|
 | REST API | Публичный HTTP API для приложения и Jarvis |
-| MCP Server | MCP-инструменты для OpenCode и Jarvis |
+| MCP Server | MCP-инструменты для любого агента с токеном |
 | Auth & Scopes | Проверка bearer-токена, определение клиента и source |
 | Ingest Service | Приём сессий и memories, идемпотентность, запись в БД |
 | Job Worker | Асинхронная обработка очереди, retry, финализация |
@@ -364,7 +364,7 @@ flowchart TB
 | Record Detail | Карточка и `raw_text` |
 | Graph | Визуализация связей |
 | Projects | Список проектов |
-| Agents | Статус OpenCode и Jarvis: активность, токены, плагин |
+| Agents | Статус источников и клиентов: активность, токены, плагин |
 | Settings | URL, токены, launch at login |
 | API Client | HTTP-клиент к `brain` |
 | Spool Watcher | Наблюдение за `spool/` |

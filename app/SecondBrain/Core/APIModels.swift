@@ -200,11 +200,6 @@ struct MemoryGraph: Codable, Equatable, Sendable {
 
 struct Stats: Codable, Equatable, Sendable {
     struct Records: Codable, Equatable, Sendable {
-        struct SourceCounts: Codable, Equatable, Sendable {
-            let opencode: Int
-            let jarvis: Int
-        }
-
         struct CardStatusCounts: Codable, Equatable, Sendable {
             let heuristic: Int
             let queued: Int
@@ -215,7 +210,9 @@ struct Stats: Codable, Equatable, Sendable {
         let total: Int
         let final: Int
         let draft: Int
-        let bySource: SourceCounts
+        /// Record counts keyed by the client source label. The server returns
+        /// only sources that currently have records.
+        let bySource: [String: Int]
         let byCardStatus: CardStatusCounts
 
         enum CodingKeys: String, CodingKey {
@@ -313,11 +310,19 @@ struct JobList: Codable, Equatable, Sendable {
 
 // MARK: - Clients
 
-enum ClientKind: String, Codable, Equatable, Sendable {
+enum ClientKind: String, Codable, Equatable, Sendable, CaseIterable {
+    case agent
     case opencode
     case jarvis
     case ui
     case admin
+
+    var isKnowledgeAgent: Bool {
+        switch self {
+        case .agent, .opencode, .jarvis: return true
+        case .ui, .admin: return false
+        }
+    }
 }
 
 enum Scope: String, Codable, Equatable, Sendable, CaseIterable {
@@ -357,7 +362,17 @@ struct ClientList: Codable, Equatable, Sendable {
 struct CreateClientRequest: Codable, Equatable, Sendable {
     let name: String
     let kind: ClientKind
+    /// Nil lets the server derive the source from the name. Only agent clients
+    /// may carry one.
+    let source: String?
     let scopes: [Scope]
+
+    init(name: String, kind: ClientKind, source: String? = nil, scopes: [Scope]) {
+        self.name = name
+        self.kind = kind
+        self.source = source
+        self.scopes = scopes
+    }
 }
 
 struct CreateClientResponse: Codable, Equatable, Sendable {

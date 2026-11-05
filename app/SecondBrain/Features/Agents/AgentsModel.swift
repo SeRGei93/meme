@@ -1,30 +1,40 @@
 import Foundation
 import Observation
 
-/// One source's server-side status. Token and plugin state are local and are
-/// added by the view from `AppState`, keeping this model testable with stubs.
-struct AgentSummary: Equatable, Sendable {
+/// One source's aggregate status. Token/plugin state that belongs to this
+/// installation is added by the view, keeping the model testable with stubs.
+struct AgentSummary: Identifiable, Equatable, Sendable {
+    let source: String
     let recordCount: Int
     let lastActivityAt: Date?
     let lastExternalID: String?
     let lastJobStatus: JobStatus?
     let activeClientNames: [String]
     let revokedClientCount: Int
+    /// True when one of the clients under this source is the OpenCode client
+    /// created by this installation, so plugin/MCP rows are relevant.
+    let isLocalOpenCode: Bool
+
+    var id: String { source }
+    var title: String { SourceStyle.title(for: source) }
 }
 
-/// Loads stats, clients and the newest jobs, then resolves the latest job for
-/// each agent kind. `last_seen_at` is not maintained by the server, so the queue
-/// is the most reliable record of the last capture/memory.
+/// Loads stats, clients and the newest jobs, then aggregates them per source.
+/// A source can have several clients (machines, rotations); records and jobs are
+/// summed, while names show which instances are active.
 @MainActor
 @Observable
 final class AgentsModel {
-    private(set) var opencode: AgentSummary?
-    private(set) var jarvis: AgentSummary?
+    private(set) var summaries: [AgentSummary] = []
     private(set) var queue: Stats.Jobs?
-    private(set) var isLoading = false
+    private(set) var isLoading = true
     private(set) var error: String?
     private(set) var jobsError: String?
     private(set) var clientsError: String?
+
+    /// Set before `load()` so the OpenCode card can show plugin/MCP rows only
+    /// for the client this installation created.
+    var localOpenCodeClient: StoredClient?
 
     private var client: APIClient?
     private var generation = 0
@@ -37,8 +47,7 @@ final class AgentsModel {
         guard self.client?.configuration != client?.configuration else { return }
         self.client = client
         generation &+= 1
-        opencode = nil
-        jarvis = nil
+        summaries = []
         queue = nil
         error = nil
         jobsError = nil
@@ -48,8 +57,7 @@ final class AgentsModel {
 
     func load() async {
         guard let client else {
-            opencode = nil
-            jarvis = nil
+            summaries = []
             queue = nil
             error = "Нет доступа к серверу. Проверьте подключение в Settings."
             isLoading = false
@@ -95,8 +103,7 @@ final class AgentsModel {
 
         guard generation == self.generation else { return }
         queue = stats.jobs
-        opencode = summary(for: .opencode, kind: "opencode", stats: stats, jobs: jobs, clients: clients)
-        jarvis = summary(for: .jarvis, kind: "jarvis", stats: stats, jobs: jobs, clients: clients)
+        summaries = buildSummaries(stats: stats, clients: clients, jobs: jobs)
         isLoading = false
     }
 
@@ -104,58 +111,73 @@ final class AgentsModel {
         await load()
     }
 
-    /// Jobs are newest-first and paginated; page through until both agent kinds
-    /// have a hit instead of assuming the latest 200 are representative.
+    /// Jobs are newest-first and paginated; page through until every source
+    /// client has a hit instead of assuming the latest 200 are representative.
     private func loadRecentJobs(
         client: APIClient,
         clients: [ClientInfo]
     ) async throws -> [IngestJob] {
-        let wantedKinds = Set(clients.map(\.kind).filter { $0 == "opencode" || $0 == "jarvis" })
-        let jobsByID = Dictionary(uniqueKeysWithValues: clients.map { ($0.id, $0.kind) })
+        let wanted = Set(clients.compactMap { $0.source == nil ? nil : $0.id })
+        guard !wanted.isEmpty else { return [] }
+
         var jobs: [IngestJob] = []
-        var foundKinds = Set<String>()
+        var found = Set<Int64>()
         var cursor: String?
 
         for _ in 0..<5 {
             let page = try await client.jobs(limit: 200, cursor: cursor)
             jobs.append(contentsOf: page.items)
 
-            for job in page.items {
-                if let kind = jobsByID[job.clientID], wantedKinds.contains(kind) {
-                    foundKinds.insert(kind)
-                }
+            for job in page.items where wanted.contains(job.clientID) {
+                found.insert(job.clientID)
             }
 
             guard let next = page.nextCursor, !next.isEmpty else { break }
-            if !wantedKinds.isEmpty, foundKinds == wantedKinds { break }
+            if found == wanted { break }
             cursor = next
         }
         return jobs
     }
 
-    private func summary(
-        for source: MemorySource,
-        kind: String,
+    private func buildSummaries(
         stats: Stats,
-        jobs: [IngestJob],
-        clients: [ClientInfo]
-    ) -> AgentSummary {
-        let matching = clients.filter { $0.kind == kind }
-        let ids = Set(matching.map(\.id))
-        let latest = jobs
-            .filter { ids.contains($0.clientID) }
-            .max { $0.createdAt < $1.createdAt }
+        clients: [ClientInfo],
+        jobs: [IngestJob]
+    ) -> [AgentSummary] {
+        var grouped: [String: [ClientInfo]] = [:]
+        for client in clients {
+            guard let source = client.source else { continue }
+            grouped[source, default: []].append(client)
+        }
+        let sources = Set(grouped.keys).union(stats.records.bySource.keys)
+        let jobsByClient = Dictionary(grouping: jobs, by: \.clientID)
 
-        return AgentSummary(
-            recordCount: source == .opencode
-                ? stats.records.bySource.opencode
-                : stats.records.bySource.jarvis,
-            lastActivityAt: latest?.createdAt,
-            lastExternalID: latest?.externalID,
-            lastJobStatus: latest?.status,
-            activeClientNames: matching.filter { $0.revokedAt == nil }.map(\.name).sorted(),
-            revokedClientCount: matching.filter { $0.revokedAt != nil }.count
-        )
+        return sources
+            .map { source in
+                let group = grouped[source] ?? []
+                let latest = group
+                    .flatMap { jobsByClient[$0.id] ?? [] }
+                    .max { $0.createdAt < $1.createdAt }
+                let isLocal = localOpenCodeClient.map { local in
+                    group.contains { $0.id == local.id && $0.name == local.name }
+                } ?? false
+
+                return AgentSummary(
+                    source: source,
+                    recordCount: stats.records.bySource[source] ?? 0,
+                    lastActivityAt: latest?.createdAt,
+                    lastExternalID: latest?.externalID,
+                    lastJobStatus: latest?.status,
+                    activeClientNames: group
+                        .filter { $0.revokedAt == nil }
+                        .map(\.name)
+                        .sorted(),
+                    revokedClientCount: group.filter { $0.revokedAt != nil }.count,
+                    isLocalOpenCode: isLocal
+                )
+            }
+            .sorted {
+                $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
     }
-
 }

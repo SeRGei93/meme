@@ -129,6 +129,21 @@ final class UITestURLProtocol: URLProtocol {
             "updated_at": "2026-11-05T11:00:00Z",
             "card_status": "ok",
         ],
+        [
+            "id": 4,
+            "source": "claude-prod",
+            "kind": "memory",
+            "project_key": "ops",
+            "title": "Claude deploy notes",
+            "summary": "Kubernetes rollout checklist.",
+            "questions": [],
+            "keywords": ["deploy", "kubernetes"],
+            "atoms": ["Roll out one replica at a time."],
+            "is_final": true,
+            "started_at": "2026-11-03T09:00:00Z",
+            "updated_at": "2026-11-03T09:00:00Z",
+            "card_status": "ok",
+        ],
     ]
 
     private static let rawTexts: [Int64: String] = [
@@ -145,6 +160,10 @@ final class UITestURLProtocol: URLProtocol {
         3: """
         Spool upload retries
         Use full jitter and Retry-After.
+        """,
+        4: """
+        Claude deploy notes
+        Roll out one replica at a time.
         """,
     ]
 
@@ -236,9 +255,11 @@ final class UITestURLProtocol: URLProtocol {
 
     private static func graphResponse(query: [String: String]) -> Data {
         let project = query["project_key"]
+        let source = query["source"]
         let nodes = graphNodes.filter {
-            guard let project else { return true }
-            return $0["project_key"] as? String == project
+            if let project, $0["project_key"] as? String != project { return false }
+            if let source, $0["source"] as? String != source { return false }
+            return true
         }
         let ids = Set(nodes.compactMap { $0["id"] as? Int })
         let edges = graphEdges.filter {
@@ -290,6 +311,14 @@ final class UITestURLProtocol: URLProtocol {
             "kind": "session",
             "updated_at": "2026-11-05T11:00:00Z",
         ],
+        [
+            "id": 4,
+            "title": "Claude deploy notes",
+            "project_key": "ops",
+            "source": "claude-prod",
+            "kind": "memory",
+            "updated_at": "2026-11-03T09:00:00Z",
+        ],
     ]
 
     private static let graphEdges: [[String: Any]] = [
@@ -335,6 +364,19 @@ final class UITestURLProtocol: URLProtocol {
             "updated_at": "2026-11-05T09:00:01Z",
         ],
         [
+            "id": 13,
+            "client_id": 4,
+            "kind": "memory",
+            "status": "done",
+            "attempts": 1,
+            "external_id": "claude_deploy",
+            "record_id": 4,
+            "next_retry_at": NSNull(),
+            "error": NSNull(),
+            "created_at": "2026-11-03T09:00:00Z",
+            "updated_at": "2026-11-03T09:00:01Z",
+        ],
+        [
             "id": 10,
             "client_id": 2,
             "kind": "ingest",
@@ -366,29 +408,32 @@ final class UITestURLProtocol: URLProtocol {
       {"id":1,"name":"second-brain-app","kind":"ui","scopes":["ui","admin"],
        "source":null,"created_at":"2026-10-01T12:00:00Z",
        "last_seen_at":null,"revoked_at":null},
-      {"id":2,"name":"opencode-macbook","kind":"opencode","scopes":["ingest"],
+      {"id":2,"name":"opencode-macbook","kind":"agent","scopes":["ingest"],
        "source":"opencode","created_at":"2026-10-01T12:00:00Z",
        "last_seen_at":null,"revoked_at":null},
-      {"id":3,"name":"jarvis","kind":"jarvis","scopes":["ingest"],
+      {"id":3,"name":"jarvis","kind":"agent","scopes":["ingest"],
        "source":"jarvis","created_at":"2026-10-01T12:00:00Z",
+       "last_seen_at":null,"revoked_at":null},
+      {"id":4,"name":"claude","kind":"agent","scopes":["mcp:read","mcp:write"],
+       "source":"claude-prod","created_at":"2026-10-02T12:00:00Z",
        "last_seen_at":null,"revoked_at":null}
     ]}
     """
 
     private static let healthJSON = """
-    {"status":"ok","version":"ui-test","schema_version":3,
+    {"status":"ok","version":"ui-test","schema_version":4,
      "time":"2026-11-05T10:00:00Z",
      "database":{"status":"ok","fts5":true}}
     """
 
     private static let statsJSON = """
-    {"records":{"total":3,"final":3,"draft":0,
-      "by_source":{"opencode":2,"jarvis":1},
-      "by_card_status":{"heuristic":0,"queued":0,"ok":3,"failed":0}},
-     "projects":2,"clients":1,
+    {"records":{"total":4,"final":4,"draft":0,
+      "by_source":{"opencode":2,"jarvis":1,"claude-prod":1},
+      "by_card_status":{"heuristic":0,"queued":0,"ok":4,"failed":0}},
+     "projects":3,"clients":4,
      "jobs":{"queued":0,"running":0,"done":3,"failed":1},
      "last_ingest_at":"2026-11-05T11:00:00Z",
-     "database":{"status":"ok","schema_version":3,"size_bytes":2048}}
+     "database":{"status":"ok","schema_version":4,"size_bytes":2048}}
     """
 }
 #endif

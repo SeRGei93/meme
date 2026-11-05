@@ -29,7 +29,7 @@ struct AgentsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Агенты")
                     .font(.largeTitle.bold())
-                Text("Статус OpenCode и Jarvis: последняя активность, токены и плагин.")
+                Text("Источники, клиенты и последняя активность. Каждый агент приходит со своим токеном.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -46,7 +46,7 @@ struct AgentsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.opencode == nil && model.jarvis == nil {
+        if model.summaries.isEmpty {
             if model.isLoading {
                 ProgressView("Проверяем агентов…")
                     .frame(maxWidth: .infinity, minHeight: 280)
@@ -59,10 +59,20 @@ struct AgentsView: View {
                 ) {
                     Task { await model.retry() }
                 }
+            } else if model.clientsError != nil {
+                ErrorPaneView(
+                    title: "Не удалось загрузить клиентов",
+                    message: model.clientsError ?? "",
+                    identifierPrefix: "agents"
+                ) {
+                    Task { await model.retry() }
+                }
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 280)
-                    .accessibilityIdentifier("agents.loading")
+                Text("Источников пока нет — выпустите токен агенту через admin API.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 200)
+                    .accessibilityIdentifier("agents.empty")
             }
         } else {
             if let error = model.error {
@@ -80,102 +90,84 @@ struct AgentsView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("agents.empty")
             }
-            HStack(alignment: .top, spacing: 12) {
-                opencodeCard
-                jarvisCard
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 320), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(model.summaries) { summary in
+                    agentCard(summary)
+                }
             }
             queueCard
         }
     }
 
-    private var opencodeCard: some View {
-        DashboardPanel(title: "OpenCode", systemImage: "terminal") {
-            if let summary = model.opencode {
+    private func agentCard(_ summary: AgentSummary) -> some View {
+        let prefix = "agents.source.\(summary.source)"
+        let token = tokenStatus(for: summary)
+
+        return DashboardPanel(
+            title: summary.title,
+            systemImage: summary.isLocalOpenCode ? "terminal" : "person.crop.circle.badge.checkmark"
+        ) {
+            StatusRowView(
+                title: "Записей",
+                value: "\(summary.recordCount)",
+                identifier: "\(prefix).records"
+            )
+            StatusRowView(
+                title: "Последняя активность",
+                value: lastActivityText(summary),
+                identifier: "\(prefix).lastActivity"
+            )
+            if let externalID = summary.lastExternalID {
+                Text(externalID)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("\(prefix).lastID")
+            }
+            if let status = summary.lastJobStatus {
                 StatusRowView(
-                    title: "Записей",
-                    value: "\(summary.recordCount)",
-                    identifier: "agents.opencode.records"
+                    title: "Последняя job",
+                    value: status.title,
+                    identifier: "\(prefix).lastStatus"
                 )
-                StatusRowView(
-                    title: "Последняя запись",
-                    value: lastActivityText(summary),
-                    identifier: "agents.opencode.lastCapture"
-                )
-                if let externalID = summary.lastExternalID {
-                    Text(externalID)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .accessibilityIdentifier("agents.opencode.lastID")
-                }
-                if let status = summary.lastJobStatus {
-                    StatusRowView(
-                        title: "Последняя job",
-                        value: status.title,
-                        identifier: "agents.opencode.lastStatus"
-                    )
-                }
+            }
+            StatusRowView(
+                title: "Клиенты",
+                value: clientText(summary),
+                tint: summary.activeClientNames.isEmpty && summary.revokedClientCount > 0 ? .red : .primary,
+                identifier: "\(prefix).clients"
+            )
+            StatusRowView(
+                title: "Токен",
+                value: token.text,
+                tint: token.color,
+                identifier: "\(prefix).token"
+            )
+
+            if summary.isLocalOpenCode {
                 StatusRowView(
                     title: "Последняя загрузка",
                     value: DateDisplay.text(appState.uploadStatus.lastSuccessAt),
-                    identifier: "agents.opencode.lastUpload"
-                )
-                tokenRow(
-                    present: appState.tokenPresence[KeychainStore.Account.opencode] == true,
-                    summary: summary,
-                    identifier: "agents.opencode.token"
+                    identifier: "\(prefix).lastUpload"
                 )
                 StatusRowView(
                     title: "Плагин",
                     value: pluginText,
                     tint: pluginColor,
-                    identifier: "agents.opencode.plugin"
+                    identifier: "\(prefix).plugin"
                 )
                 StatusRowView(
                     title: "MCP",
                     value: mcpText,
                     tint: mcpColor,
-                    identifier: "agents.opencode.mcp"
+                    identifier: "\(prefix).mcp"
                 )
-            } else {
-                Text("Нет данных")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var jarvisCard: some View {
-        DashboardPanel(title: "Jarvis", systemImage: "sparkles") {
-            if let summary = model.jarvis {
-                StatusRowView(
-                    title: "Записей",
-                    value: "\(summary.recordCount)",
-                    identifier: "agents.jarvis.records"
-                )
-                StatusRowView(
-                    title: "Последняя память",
-                    value: lastActivityText(summary),
-                    identifier: "agents.jarvis.lastMemory"
-                )
-                if let externalID = summary.lastExternalID {
-                    Text(externalID)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .accessibilityIdentifier("agents.jarvis.lastID")
-                }
-                tokenRow(
-                    present: appState.tokenPresence[KeychainStore.Account.jarvis] == true,
-                    summary: summary,
-                    identifier: "agents.jarvis.token"
-                )
-            } else {
-                Text("Нет данных")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -221,37 +213,37 @@ struct AgentsView: View {
         }
     }
 
-    private func tokenRow(
-        present: Bool,
-        summary: AgentSummary,
-        identifier: String
-    ) -> some View {
-        let text: String
-        let color: Color
-        if !present {
-            text = "Нет токена"
-            color = .orange
-        } else if model.clientsError != nil {
-            text = "Токен есть, сервер не подтвердил"
-            color = .orange
-        } else if summary.activeClientNames.isEmpty {
-            if summary.revokedClientCount > 0 {
-                text = "Токен отозван на сервере"
-                color = .red
-            } else {
-                text = "Токен есть, активный клиент не найден"
-                color = .orange
+    private func tokenStatus(for summary: AgentSummary) -> (text: String, color: Color) {
+        if summary.isLocalOpenCode {
+            let present = appState.tokenPresence[KeychainStore.Account.opencode] == true
+            if !present {
+                return ("Нет токена", .orange)
             }
-        } else {
-            text = "Есть · \(summary.activeClientNames.joined(separator: ", "))"
-            color = .green
+            if model.clientsError != nil {
+                return ("Токен есть, сервер не подтвердил", .orange)
+            }
         }
-        return StatusRowView(
-            title: "Токен",
-            value: text,
-            tint: color,
-            identifier: identifier
-        )
+
+        if !summary.activeClientNames.isEmpty {
+            return ("На сервере · \(summary.activeClientNames.joined(separator: ", "))", .green)
+        }
+        if summary.revokedClientCount > 0 {
+            return ("Только отозванные клиенты", .red)
+        }
+        return ("Нет активного клиента", .orange)
+    }
+
+    private func clientText(_ summary: AgentSummary) -> String {
+        let active = summary.activeClientNames.joined(separator: ", ")
+        if active.isEmpty {
+            return summary.revokedClientCount > 0
+                ? "Только отозванные (\(summary.revokedClientCount))"
+                : "Нет клиентов"
+        }
+        if summary.revokedClientCount > 0 {
+            return "\(active) · отозвано: \(summary.revokedClientCount)"
+        }
+        return active
     }
 
     private func lastActivityText(_ summary: AgentSummary) -> String {
@@ -265,8 +257,7 @@ struct AgentsView: View {
     }
 
     private var isIdle: Bool {
-        (model.opencode?.recordCount ?? 0) == 0
-            && (model.jarvis?.recordCount ?? 0) == 0
+        model.summaries.allSatisfy { $0.recordCount == 0 }
             && (model.queue?.queued ?? 0) == 0
             && (model.queue?.running ?? 0) == 0
     }
@@ -310,6 +301,7 @@ struct AgentsView: View {
 
     private func reload() async {
         model.setClient(appState.makeReadClient())
+        model.localOpenCodeClient = appState.localAppClients["opencode"]
         await model.load()
     }
 }

@@ -100,7 +100,6 @@ final class AppStateIntegrationTests: XCTestCase {
 
         XCTAssertEqual(state.tokenPresence[KeychainStore.Account.ui], true)
         XCTAssertEqual(state.tokenPresence[KeychainStore.Account.opencode], false)
-        XCTAssertEqual(state.tokenPresence[KeychainStore.Account.jarvis], false)
     }
 
     func testInstallWithoutAServerStillInstallsThePlugin() throws {
@@ -225,7 +224,7 @@ final class AppStateIntegrationTests: XCTestCase {
             headers["Authorization"] as? String,
             "Bearer {file:\(configDirectory.appendingPathComponent("mcp_token").path)}"
         )
-        XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_opencode_1")
+        XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_agent_1")
     }
 
     func testBootstrapUploadsExistingSpoolFiles() async throws {
@@ -382,15 +381,20 @@ private enum StubOnboardingServer {
             case ("POST", "/api/v1/clients"):
                 let body = try XCTUnwrap(request.bodyData)
                 let spec = try JSONDecoder().decode(CreateClientRequest.self, from: body)
-                let id: Int64 = spec.kind == .opencode ? 1 : (spec.kind == .jarvis ? 2 : 3)
+                let id: Int64 = spec.kind.isKnowledgeAgent ? 1 : 3
                 let client = ClientInfo(
                     id: id, name: spec.name, kind: spec.kind.rawValue,
                     scopes: spec.scopes.map(\.rawValue),
-                    source: spec.kind == .opencode ? "opencode" : nil,
+                    source: spec.kind.isKnowledgeAgent
+                        ? (spec.source ?? spec.name.lowercased())
+                        : nil,
                     createdAt: Date(timeIntervalSince1970: 0),
                     lastSeenAt: nil, revokedAt: nil
                 )
-                let response = CreateClientResponse(client: client, token: "sb_\(spec.kind.rawValue)_\(id)")
+                let response = CreateClientResponse(
+                    client: client,
+                    token: "sb_\(spec.kind.isKnowledgeAgent ? "agent" : spec.kind.rawValue)_\(id)"
+                )
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
                 return .init(status: 201, body: try encoder.encode(response))

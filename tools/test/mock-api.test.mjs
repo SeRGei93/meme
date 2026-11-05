@@ -103,7 +103,7 @@ test('mock API implements the v1 contract', async (t) => {
     }
   });
 
-  await t.test('admin creates ingest clients with server-derived source', async () => {
+  await t.test('admin creates ingest clients with server-derived or explicit source', async () => {
     state.opencode = (await jsonRequest('/api/v1/clients', {
       method: 'POST',
       token: ADMIN_TOKEN,
@@ -113,20 +113,30 @@ test('mock API implements the v1 contract', async (t) => {
     state.jarvis = (await jsonRequest('/api/v1/clients', {
       method: 'POST',
       token: ADMIN_TOKEN,
-      body: { name: 'jarvis', kind: 'jarvis', scopes: ['ingest', 'mcp:read', 'mcp:write'] },
+      body: { name: 'jarvis', kind: 'agent', source: 'jarvis', scopes: ['ingest', 'mcp:read', 'mcp:write'] },
     })).body;
 
-    assert.equal(state.opencode.client.source, 'opencode');
+    assert.equal(state.opencode.client.kind, 'agent');
+    assert.equal(state.opencode.client.source, 'opencode-macbook');
+    assert.equal(state.jarvis.client.kind, 'agent');
     assert.equal(state.jarvis.client.source, 'jarvis');
-    assert.match(state.opencode.token, /^sb_opencode_[A-Za-z0-9_-]{43}$/);
-    assert.match(state.jarvis.token, /^sb_jarvis_[A-Za-z0-9_-]{43}$/);
+    assert.match(state.opencode.token, /^sb_agent_[A-Za-z0-9_-]{43}$/);
+    assert.match(state.jarvis.token, /^sb_agent_[A-Za-z0-9_-]{43}$/);
+
+    const duplicate = await jsonRequest('/api/v1/clients', {
+      method: 'POST',
+      token: ADMIN_TOKEN,
+      body: { name: 'another-agent', kind: 'agent', source: 'jarvis', scopes: ['mcp:read'] },
+    });
+    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.body.error.details.field, 'source');
   });
 
   await t.test('duplicate client names conflict and invalid scopes fail validation', async () => {
     const duplicate = await jsonRequest('/api/v1/clients', {
       method: 'POST',
       token: ADMIN_TOKEN,
-      body: { name: 'jarvis', kind: 'jarvis', scopes: ['ingest'] },
+      body: { name: 'jarvis', kind: 'agent', source: 'other', scopes: ['ingest'] },
     });
     assert.equal(duplicate.status, 409);
     assert.equal(duplicate.body.error.code, 'conflict');
@@ -140,7 +150,7 @@ test('mock API implements the v1 contract', async (t) => {
     assert.equal(invalid.body.error.code, 'validation_failed');
   });
 
-  await t.test('ingest requires an opencode client and a valid bundle', async () => {
+  await t.test('ingest requires a source-bearing client and a valid bundle', async () => {
     const unauthorized = await jsonRequest('/api/v1/ingest', { method: 'POST', body: ingestBody() });
     assert.equal(unauthorized.status, 401);
 
@@ -151,9 +161,14 @@ test('mock API implements the v1 contract', async (t) => {
     });
     assert.equal(wrongScope.status, 403);
 
+    const noSource = (await jsonRequest('/api/v1/clients', {
+      method: 'POST',
+      token: ADMIN_TOKEN,
+      body: { name: 'ui-ingest', kind: 'ui', scopes: ['ingest'] },
+    })).body;
     const wrongKind = await jsonRequest('/api/v1/ingest', {
       method: 'POST',
-      token: state.jarvis.token,
+      token: noSource.token,
       body: ingestBody(),
     });
     assert.equal(wrongKind.status, 403);
@@ -366,7 +381,7 @@ test('mock API implements the v1 contract', async (t) => {
     assert.equal(record.body.id, state.recordId);
     assert.match(record.body.raw_text, /migration 004/i);
     assert.equal(record.body.revision, 1);
-    assert.equal(record.body.source, 'opencode');
+    assert.equal(record.body.source, 'opencode-macbook');
 
     const missing = await jsonRequest('/api/v1/records/999999', { token: state.uiToken });
     assert.equal(missing.status, 404);
@@ -399,11 +414,24 @@ test('mock API implements the v1 contract', async (t) => {
     );
   });
 
+  await t.test('graph accepts an arbitrary source filter', async () => {
+    const filtered = await jsonRequest('/api/v1/graph?source=jarvis', { token: state.uiToken });
+    assert.equal(filtered.status, 200);
+    assert.ok(filtered.body.nodes.every((node) => node.source === 'jarvis'));
+
+    const unknown = await jsonRequest('/api/v1/graph?source=cursor', { token: state.uiToken });
+    assert.equal(unknown.status, 200);
+    assert.equal(unknown.body.nodes.length, 0);
+
+    const bad = await jsonRequest('/api/v1/graph?source=', { token: state.uiToken });
+    assert.equal(bad.status, 400);
+  });
+
   await t.test('stats aggregate records, sources and jobs', async () => {
     const stats = await jsonRequest('/api/v1/stats', { token: state.uiToken });
     assert.equal(stats.status, 200);
     assert.ok(stats.body.records.total >= 4);
-    assert.ok(stats.body.records.by_source.opencode >= 2);
+    assert.ok(stats.body.records.by_source['opencode-macbook'] >= 2);
     assert.ok(stats.body.records.by_source.jarvis >= 2);
     assert.ok(stats.body.jobs.queued >= 2);
     assert.equal(stats.body.database.status, 'ok');

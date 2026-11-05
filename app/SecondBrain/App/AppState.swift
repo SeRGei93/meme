@@ -37,6 +37,12 @@ final class AppState {
     var onboardingBusy = false
     var onboardingError: String?
 
+    /// Clients this installation created, keyed by role. Read from the shared
+    /// config; used by the agents screen to mark the local OpenCode source.
+    var localAppClients: [String: StoredClient] {
+        (try? configStore.load())?.appClients ?? [:]
+    }
+
     // MARK: OpenCode integration
 
     var pluginStatus: PluginInstallStatus?

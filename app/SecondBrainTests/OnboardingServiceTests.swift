@@ -57,33 +57,30 @@ final class OnboardingServiceTests: XCTestCase {
         XCTAssertEqual(result.health.status, "ok")
         XCTAssertEqual(result.serverURL, serverURL)
 
-        XCTAssertEqual(server.created.count, 3)
-        XCTAssertEqual(server.created.map(\.kind), [.opencode, .jarvis, .ui])
+        XCTAssertEqual(server.created.count, 2)
+        XCTAssertEqual(server.created.map(\.kind), [.agent, .ui])
         XCTAssertEqual(server.created[0].scopes, [.ingest, .mcpRead, .mcpWrite])
-        XCTAssertEqual(server.created[1].scopes, [.ingest, .mcpRead, .mcpWrite])
-        XCTAssertEqual(server.created[2].scopes, [.ui, .admin])
+        XCTAssertEqual(server.created[1].scopes, [.ui, .admin])
 
         // The legacy `opencode-macbook` client is left alone; the new client
         // gets a unique suffix instead.
         XCTAssertTrue(server.created[0].name.hasPrefix("opencode-macbook-"))
-        XCTAssertEqual(server.created[1].name, "jarvis")
-        XCTAssertEqual(server.created[2].name, "second-brain-app")
+        XCTAssertEqual(server.created[1].name, "second-brain-app")
         XCTAssertTrue(server.revoked.isEmpty)
         XCTAssertTrue(server.isActive(id: 7))
 
         let opencodeToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode))
-        let jarvisToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis))
         let uiToken = try XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui))
-        XCTAssertEqual(opencodeToken, server.activeToken(kind: "opencode"))
-        XCTAssertEqual(jarvisToken, server.activeToken(kind: "jarvis"))
+        XCTAssertEqual(opencodeToken, server.activeToken(kind: "agent"))
         XCTAssertEqual(uiToken, server.activeToken(kind: "ui"))
+        XCTAssertNil(try keychain.value(for: "jarvis"))
         XCTAssertEqual(server.lastStatsToken, uiToken)
 
         let config = try XCTUnwrap(try ConfigStore(directory: directory).load())
         XCTAssertEqual(config.serverURL, serverURL)
         XCTAssertEqual(config.spoolDir, "/tmp/second-brain-spool")
         XCTAssertEqual(config.idleDebounceMilliseconds, 300_000)
-        XCTAssertEqual(config.appClients?.count, 3)
+        XCTAssertEqual(config.appClients?.count, 2)
         XCTAssertEqual(config.appClients?["ui"]?.id, server.client(named: "second-brain-app")?.id)
 
         let tokenFile = MCPTokenFile(directory: directory)
@@ -92,7 +89,6 @@ final class OnboardingServiceTests: XCTestCase {
 
         // The bootstrap admin token must never be persisted locally.
         XCTAssertNotEqual(opencodeToken, adminToken)
-        XCTAssertNotEqual(jarvisToken, adminToken)
         XCTAssertNotEqual(uiToken, adminToken)
         let configText = try String(contentsOf: configFileURL, encoding: .utf8)
         XCTAssertFalse(configText.contains(adminToken))
@@ -107,12 +103,12 @@ final class OnboardingServiceTests: XCTestCase {
 
         let second = try await service.run(serverURL: serverURL, adminToken: adminToken)
 
-        XCTAssertEqual(server.created.count, 6)
+        XCTAssertEqual(server.created.count, 4)
         let secondConfig = try XCTUnwrap(try ConfigStore(directory: directory).load())
         let secondClients = try XCTUnwrap(secondConfig.appClients)
-        XCTAssertEqual(secondClients.count, 3)
+        XCTAssertEqual(secondClients.count, 2)
 
-        for role in ["opencode", "jarvis", "ui"] {
+        for role in ["opencode", "ui"] {
             let old = try XCTUnwrap(firstClients[role])
             let new = try XCTUnwrap(secondClients[role])
             XCTAssertNotEqual(old.id, new.id)
@@ -122,7 +118,7 @@ final class OnboardingServiceTests: XCTestCase {
 
         XCTAssertTrue(server.isActive(id: 7), "legacy client is not ours and must stay active")
         XCTAssertNotEqual(firstTokens, try tokens())
-        XCTAssertEqual(second.clientIDs.count, 3)
+        XCTAssertEqual(second.clientIDs.count, 2)
     }
 
     func testFailedRotationKeepsPreviousTokensAndClients() async throws {
@@ -264,7 +260,6 @@ final class OnboardingServiceTests: XCTestCase {
     private func tokens() throws -> [String] {
         try [
             XCTUnwrap(try keychain.value(for: KeychainStore.Account.opencode)),
-            XCTUnwrap(try keychain.value(for: KeychainStore.Account.jarvis)),
             XCTUnwrap(try keychain.value(for: KeychainStore.Account.ui)),
         ]
     }
@@ -289,7 +284,7 @@ private final class FakeServer: @unchecked Sendable {
 
     var healthStatus = 200
     var healthBody = """
-    {"status":"ok","version":"test","schema_version":3,
+    {"status":"ok","version":"test","schema_version":4,
      "time":"2026-11-04T19:30:10Z",
      "database":{"status":"ok","fts5":true}}
     """
@@ -371,12 +366,14 @@ private final class FakeServer: @unchecked Sendable {
                     name: spec.name,
                     kind: spec.kind.rawValue,
                     scopes: spec.scopes.map(\.rawValue),
-                    source: spec.kind == .opencode ? "opencode" : (spec.kind == .jarvis ? "jarvis" : nil),
+                    source: spec.kind.isKnowledgeAgent
+                        ? (spec.source ?? spec.name.lowercased())
+                        : nil,
                     createdAt: Date(timeIntervalSince1970: 0),
                     lastSeenAt: nil,
                     revokedAt: nil
                 )
-                let token = "sb_\(spec.kind.rawValue)_\(id)"
+                let token = "sb_\(spec.kind.isKnowledgeAgent ? "agent" : spec.kind.rawValue)_\(id)"
                 clients.append(info)
                 tokens[id] = token
                 return (info, token)
@@ -446,10 +443,10 @@ private final class FakeServer: @unchecked Sendable {
 
     private static let statsJSON = """
     {"records":{"total":1,"final":1,"draft":0,
-      "by_source":{"opencode":1,"jarvis":0},
+      "by_source":{"opencode":1},
       "by_card_status":{"heuristic":0,"queued":0,"ok":1,"failed":0}},
      "projects":1,"clients":3,
      "jobs":{"queued":0,"running":0,"done":0,"failed":0},
-     "database":{"status":"ok","schema_version":3,"size_bytes":1024}}
+     "database":{"status":"ok","schema_version":4,"size_bytes":1024}}
     """
 }
