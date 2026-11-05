@@ -451,19 +451,21 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 ### Задачи
 
 - [x] Подтвердить основной путь: MCP основной, HTTP — fallback (ADR-11).
-- [ ] Токен `jarvis` со scope `mcp:read`, `mcp:write`, `ingest`; выпуск admin-токеном и передача в секрет Jarvis.
+- [x] Токен `jarvis`: CLI `brain client create`, admin API, scope `mcp:read`, `mcp:write`, `ingest`.
+- [ ] Передать выпущенный токен в секрет Jarvis (действие владельца сервера).
 - [x] Generic clients: source на клиенте, выпуск для любого агента (ADR-11).
-- [ ] MCP:
-  - [ ] `remember`;
-  - [ ] `search`;
-  - [ ] инструкция для Jarvis.
-- [ ] HTTP:
-  - [ ] `POST /api/v1/memories`;
-  - [ ] `GET /api/v1/search`.
-- [ ] Source mapping: `source=jarvis` из токена.
-- [ ] Идемпотентность по `external_id`.
-- [ ] Документация: URL, заголовок, примеры.
-- [ ] Проверка: команда «запомни» → запись → поиск находит.
+- [x] MCP:
+  - [x] `remember`;
+  - [x] `search`;
+  - [x] [инструкция для Jarvis](jarvis.md).
+- [x] HTTP:
+  - [x] `POST /api/v1/memories`;
+  - [x] `GET /api/v1/search`.
+- [x] Source mapping: `source=jarvis` из токена.
+- [x] Идемпотентность по `external_id`.
+- [x] Документация: URL, заголовок, примеры.
+- [x] Серверный e2e: скрипт `tools/jarvis-smoke.sh` и тест `cd server && go test -run TestJarvis ./internal/httpapi`.
+- [ ] Живая проверка в самом Jarvis после передачи секрета.
 
 ### Acceptance criteria
 

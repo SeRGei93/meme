@@ -1004,7 +1004,8 @@ ingest
 | `list_projects` | `mcp:read` | Проекты |
 | `stats` | `mcp:read` | Состояние базы |
 
-MCP endpoint: `https://brain.example.com/mcp`.
+MCP endpoint: `https://brain.example.com/mcp`. Инструкция для внешнего агента:
+[docs/jarvis.md](jarvis.md).
 
 ## 9.3 OpenCode MCP config
 
