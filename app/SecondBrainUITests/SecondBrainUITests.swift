@@ -216,6 +216,11 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(element("clients.badge.2", in: app).exists)
         XCTAssertEqual(element("clients.badge.2", in: app).value as? String, "Локальный OpenCode")
         XCTAssertTrue(element("clients.protected.1", in: app).exists)
+        XCTAssertFalse(
+            app.buttons["clients.rotate.2"].exists,
+            "the local OpenCode client rotates through Settings, not this screen"
+        )
+        XCTAssertTrue(element("clients.rotationHint.2", in: app).exists)
         XCTAssertEqual(element("clients.scopes.3", in: app).value as? String, "ingest")
         XCTAssertEqual(element("clients.lastSeen.3", in: app).value as? String, "Активность: Нет данных")
         XCTAssertFalse(
@@ -250,8 +255,129 @@ final class SecondBrainUITests: XCTestCase {
         )
     }
 
-    func testClientsShowsEmptyState() throws {
+    func testClientCreationShowsOneTimeTokenAndAddsClient() throws {
+        let root = try makeClientsConfig()
+        defer { try? FileManager.default.removeItem(at: root) }
         let app = configuredApp(
+            configDirectory: root,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "clients",
+            uiCreateName: "claude-laptop"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("clients.row.1", in: app).waitForExistence(timeout: 20))
+        app.buttons["clients.new"].click()
+
+        let name = app.textFields["clients.create.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "claude-laptop")
+        XCTAssertEqual(
+            app.textFields["clients.create.source"].placeholderValue,
+            "claude-laptop",
+            "an empty source previews the slug derived from the name"
+        )
+
+        app.buttons["clients.create.submit"].click()
+
+        let token = element("clients.token.value", in: app)
+        XCTAssertTrue(token.waitForExistence(timeout: 10))
+        XCTAssertEqual(token.value as? String, "sb_agent_ui_test_5")
+
+        app.buttons["clients.token.done"].click()
+        let stay = app.sheets.buttons["Остаться"]
+        XCTAssertTrue(stay.waitForExistence(timeout: 5), "closing without copying must ask for confirmation")
+        stay.click()
+        XCTAssertTrue(token.exists)
+
+        app.buttons["clients.token.copy"].click()
+        XCTAssertTrue(element("clients.token.copied", in: app).waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string),
+            token.value as? String,
+            "the copy button must put the one-time token on the clipboard"
+        )
+        app.buttons["clients.token.done"].click()
+
+        XCTAssertTrue(element("clients.row.5", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["clients.name.5"].value as? String, "claude-laptop")
+        XCTAssertEqual(element("clients.activeCount", in: app).value as? String, "Активных: 5")
+        XCTAssertEqual(element("clients.source.5", in: app).value as? String, "source: claude-laptop")
+
+        let config = try String(contentsOf: root.appendingPathComponent("config.json"), encoding: .utf8)
+        XCTAssertFalse(config.contains("sb_agent_ui_test_5"), "tokens must never reach config.json")
+    }
+
+    func testClientCreationConflictKeepsTheFormAndShowsTheError() throws {
+        let root = try makeClientsConfig()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = configuredApp(
+            configDirectory: root,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "clients",
+            uiCreateName: "jarvis"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("clients.row.1", in: app).waitForExistence(timeout: 20))
+        app.buttons["clients.new"].click()
+
+        let name = app.textFields["clients.create.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        app.buttons["clients.create.submit"].click()
+
+        let error = element("clients.create.error", in: app)
+        XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue((error.value as? String)?.contains("занято") == true)
+        XCTAssertTrue(name.exists, "the form must keep the entered name")
+        XCTAssertEqual(name.value as? String, "jarvis")
+    }
+
+    func testClientRotationKeepsSourceAndShowsTheNewToken() throws {
+        let root = try makeClientsConfig()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = configuredApp(
+            configDirectory: root,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "clients"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("clients.row.4", in: app).waitForExistence(timeout: 20))
+        app.buttons["clients.rotate.4"].click()
+
+        let confirm = app.sheets.buttons["Ротировать"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.click()
+
+        let token = element("clients.token.value", in: app)
+        XCTAssertTrue(token.waitForExistence(timeout: 10))
+        XCTAssertEqual(token.value as? String, "sb_agent_ui_test_5")
+        app.buttons["clients.token.copy"].click()
+        XCTAssertTrue(element("clients.token.copied", in: app).waitForExistence(timeout: 5))
+        app.buttons["clients.token.done"].click()
+
+        XCTAssertTrue(element("clients.row.5", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["clients.name.5"].value as? String, "claude")
+        XCTAssertEqual(element("clients.source.5", in: app).value as? String, "source: claude-prod")
+        XCTAssertEqual(element("clients.scopes.5", in: app).value as? String, "mcp:read, mcp:write")
+
+        let revoked = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Отозван"),
+            object: element("clients.status.4", in: app)
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [revoked], timeout: 10), .completed)
+        XCTAssertEqual(element("clients.revokedCount", in: app).value as? String, "Отозвано: 1")
+    }
+
+    func testClientsShowsEmptyState() throws {
+        let root = try makeClientsConfig()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = configuredApp(
+            configDirectory: root,
             uiToken: "sb_ui_test",
             mockAPI: true,
             uiSection: "clients",
@@ -661,6 +787,22 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.buttons["onboarding.connect"].exists)
     }
 
+    private func makeClientsConfig() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-clients-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config: [String: Any] = [
+            "server_url": "https://ui.test",
+            "app_clients": [
+                "ui": ["id": 1, "name": "second-brain-app"],
+                "opencode": ["id": 2, "name": "opencode-macbook"],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: root.appendingPathComponent("config.json"))
+        return root
+    }
+
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier].firstMatch
     }
@@ -675,6 +817,7 @@ final class SecondBrainUITests: XCTestCase {
         uiQuery: String? = nil,
         uiRawQuery: String? = nil,
         uiSection: String? = nil,
+        uiCreateName: String? = nil,
         uiTokens: String? = nil,
         uiGraph: String? = nil,
         uiClients: String? = nil,
@@ -708,6 +851,9 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let uiSection {
             app.launchEnvironment["SECOND_BRAIN_UI_SECTION"] = uiSection
+        }
+        if let uiCreateName {
+            app.launchEnvironment["SECOND_BRAIN_UI_CREATE_NAME"] = uiCreateName
         }
         if let uiTokens {
             app.launchEnvironment["SECOND_BRAIN_UI_TOKENS"] = uiTokens

@@ -57,7 +57,12 @@ final class UITestURLProtocol: URLProtocol {
         case "/api/v1/jobs":
             payload = (200, Self.jobsResponse(query: query))
         case "/api/v1/clients":
-            payload = (200, Self.clientsResponse())
+            switch request.httpMethod {
+            case "POST":
+                payload = Self.createClient(request)
+            default:
+                payload = (200, Self.clientsResponse())
+            }
         default:
             if path.hasPrefix("/api/v1/clients/"),
                request.httpMethod == "DELETE",
@@ -449,6 +454,51 @@ final class UITestURLProtocol: URLProtocol {
         )) ?? Data("{}".utf8)
     }
 
+    private static func createClient(_ request: URLRequest) -> (Int, Data) {
+        guard let body = request.uiTestBodyData,
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let name = object["name"] as? String,
+              !name.isEmpty else {
+            return (422, errorBody("validation_failed", "name is required"))
+        }
+
+        let kind = object["kind"] as? String ?? "agent"
+        let source = object["source"] as? String
+        let scopes = object["scopes"] as? [String] ?? []
+
+        clientsLock.lock()
+        defer { clientsLock.unlock() }
+
+        let active = clientItems.filter { $0["revoked_at"] is NSNull }
+        if active.contains(where: { $0["name"] as? String == name }) {
+            return (409, errorBody("conflict", "client name is already in use", field: "name"))
+        }
+        if let source, !source.isEmpty,
+           active.contains(where: { $0["source"] as? String == source }) {
+            return (409, errorBody("conflict", "client source is already in use", field: "source"))
+        }
+
+        let id = (clientItems.compactMap { clientID($0) }.max() ?? 0) + 1
+        let item: [String: Any] = [
+            "id": id,
+            "name": name,
+            "kind": kind,
+            "scopes": scopes,
+            "source": source.map { $0 as Any } ?? NSNull(),
+            "created_at": "2026-11-06T12:00:00Z",
+            "last_seen_at": NSNull(),
+            "revoked_at": NSNull(),
+        ]
+        clientItems.append(item)
+        let response: [String: Any] = [
+            "client": item,
+            "token": "sb_agent_ui_test_\(id)",
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+            ?? Data("{}".utf8)
+        return (201, data)
+    }
+
     private static func revokeClient(id: Int64) -> (Int, Data) {
         clientsLock.lock()
         defer { clientsLock.unlock() }
@@ -472,7 +522,7 @@ final class UITestURLProtocol: URLProtocol {
     ) -> Data {
         var payload: [String: Any] = ["code": code, "message": message]
         if let field {
-            payload["field"] = field
+            payload["details"] = ["field": field]
         }
         let envelope: [String: Any] = ["error": payload]
         return (try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]))
@@ -496,4 +546,24 @@ final class UITestURLProtocol: URLProtocol {
     """
 }
 
+private extension URLRequest {
+    /// URLSession turns `httpBody` into a stream before it reaches a
+    /// `URLProtocol`; read the stream when the direct body is absent.
+    var uiTestBodyData: Data? {
+        if let httpBody { return httpBody }
+        guard let httpBodyStream else { return nil }
+        httpBodyStream.open()
+        defer { httpBodyStream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while httpBodyStream.hasBytesAvailable {
+            let read = httpBodyStream.read(buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+}
 #endif

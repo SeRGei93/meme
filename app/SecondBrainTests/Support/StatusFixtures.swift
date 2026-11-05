@@ -91,13 +91,14 @@ enum StatusFixtures {
         kind: String,
         source: String? = nil,
         revokedAt: String? = nil,
-        lastSeenAt: String? = nil
+        lastSeenAt: String? = nil,
+        scopes: [String] = []
     ) -> [String: Any] {
         var object: [String: Any] = [
             "id": id,
             "name": name,
             "kind": kind,
-            "scopes": [],
+            "scopes": scopes,
             "created_at": "2026-10-01T12:00:00Z",
         ]
         object["source"] = source ?? (kind == "opencode" || kind == "jarvis" ? kind : nil)

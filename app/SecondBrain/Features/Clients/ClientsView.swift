@@ -3,7 +3,10 @@ import SwiftUI
 struct ClientsView: View {
     @Environment(AppState.self) private var appState
     @State private var model = ClientsModel()
-    @State private var pendingRevoke: ClientInfo?
+    @State private var pendingAction: PendingAction?
+    @State private var showCreate = false
+    @State private var pendingToken: IssuedToken?
+    @State private var issued: IssuedToken?
 
     var body: some View {
         ScrollView {
@@ -24,25 +27,45 @@ struct ClientsView: View {
             Task { await reload() }
         }
         .alert(
-            "Отозвать клиента?",
+            alertTitle,
             isPresented: Binding(
-                get: { pendingRevoke != nil },
-                set: { if !$0 { pendingRevoke = nil } }
+                get: { pendingAction != nil },
+                set: { if !$0 { pendingAction = nil } }
             ),
-            presenting: pendingRevoke
-        ) { info in
-            Button("Отозвать", role: .destructive) {
-                pendingRevoke = nil
-                Task { await model.revoke(info) }
+            presenting: pendingAction
+        ) { action in
+            switch action {
+            case .revoke(let info):
+                Button("Отозвать", role: .destructive) {
+                    pendingAction = nil
+                    Task { await model.revoke(info) }
+                }
+            case .rotate(let info):
+                Button("Ротировать", role: .destructive) {
+                    pendingAction = nil
+                    Task {
+                        if let token = await model.rotate(info) {
+                            issued = token
+                        }
+                    }
+                }
             }
             Button("Отмена", role: .cancel) {
-                pendingRevoke = nil
+                pendingAction = nil
             }
-        } message: { info in
-            Text(
-                "Токен клиента «\(info.name)» перестанет работать сразу. "
-                    + "Восстановить его нельзя — можно только выпустить новый."
-            )
+        } message: { action in
+            Text(alertMessage(action))
+        }
+        .sheet(isPresented: $showCreate, onDismiss: presentPendingToken) {
+            ClientCreateSheet(model: model) { token in
+                pendingToken = token
+                showCreate = false
+            }
+        }
+        .sheet(item: $issued) { token in
+            TokenIssuedView(issued: token) {
+                issued = nil
+            }
         }
     }
 
@@ -57,6 +80,15 @@ struct ClientsView: View {
             }
             Spacer()
             HStack(spacing: 12) {
+                Button {
+                    model.clearActionError()
+                    showCreate = true
+                } label: {
+                    Label("Новый клиент", systemImage: "plus")
+                }
+                .disabled(isBusy)
+                .accessibilityIdentifier("clients.new")
+
                 Text("Активных: \(model.activeClients.count)")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -70,7 +102,7 @@ struct ClientsView: View {
                 } label: {
                     Label("Обновить", systemImage: "arrow.clockwise")
                 }
-                .disabled(model.isLoading || model.revokingID != nil)
+                .disabled(model.isLoading || isBusy)
                 .accessibilityIdentifier("clients.refresh")
             }
         }
@@ -130,7 +162,10 @@ struct ClientsView: View {
                 .accessibilityHidden(true)
             Text("Клиентов пока нет")
                 .font(.headline)
-            Text("Токены выпускаются в onboarding или через admin API / brain client create.")
+            Text(
+                "Выпустите агента кнопкой «Новый клиент», подключите приложение "
+                    + "через onboarding или создайте клиента через CLI."
+            )
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -209,19 +244,63 @@ struct ClientsView: View {
     @ViewBuilder
     private func actionButton(for info: ClientInfo) -> some View {
         if model.canRevoke(info) {
-            Button("Отозвать") {
-                pendingRevoke = info
+            HStack(spacing: 6) {
+                if model.canRotate(info) {
+                    Button("Ротация") {
+                        pendingAction = .rotate(info)
+                    }
+                    .controlSize(.small)
+                    .disabled(isBusy)
+                    .accessibilityIdentifier("clients.rotate.\(info.id)")
+                } else if model.isLocalOpenCode(info) {
+                    Text("Ротация — в Settings")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("clients.rotationHint.\(info.id)")
+                }
+                Button("Отозвать") {
+                    pendingAction = .revoke(info)
+                }
+                .controlSize(.small)
+                .tint(.red)
+                .disabled(isBusy)
+                .accessibilityIdentifier("clients.revoke.\(info.id)")
             }
-            .controlSize(.small)
-            .tint(.red)
-            .disabled(model.revokingID != nil)
-            .accessibilityIdentifier("clients.revoke.\(info.id)")
         } else if model.isProtectedUI(info), info.revokedAt == nil {
             Text("Защищён от отзыва")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clients.protected.\(info.id)")
         }
+    }
+
+    private var isBusy: Bool {
+        model.revokingID != nil || model.rotatingID != nil || model.isCreating
+    }
+
+    private var alertTitle: String {
+        switch pendingAction {
+        case .revoke?: return "Отозвать клиента?"
+        case .rotate?: return "Ротировать клиента?"
+        case nil: return ""
+        }
+    }
+
+    private func alertMessage(_ action: PendingAction) -> String {
+        switch action {
+        case .revoke(let info):
+            return "Токен клиента «\(info.name)» перестанет работать сразу. "
+                + "Восстановить его нельзя — можно только выпустить новый."
+        case .rotate(let info):
+            return "Старый токен клиента «\(info.name)» будет отозван сразу. "
+                + "Новый клиент получит тот же source и scopes; новый токен покажется один раз."
+        }
+    }
+
+    private func presentPendingToken() {
+        guard let token = pendingToken else { return }
+        pendingToken = nil
+        issued = token
     }
 
     private func statusBadge(_ info: ClientInfo) -> some View {
@@ -255,6 +334,18 @@ struct ClientsView: View {
         case "ui": return "UI"
         case "admin": return "admin"
         default: return kind
+        }
+    }
+
+    private enum PendingAction: Identifiable {
+        case revoke(ClientInfo)
+        case rotate(ClientInfo)
+
+        var id: String {
+            switch self {
+            case .revoke(let info): return "revoke-\(info.id)"
+            case .rotate(let info): return "rotate-\(info.id)"
+            }
         }
     }
 

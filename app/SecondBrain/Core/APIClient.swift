@@ -282,6 +282,7 @@ struct APIClient: Sendable {
                 status: status,
                 code: envelope?.error.code ?? "http_\(status)",
                 message: envelope?.error.message ?? "HTTP \(status)",
+                field: envelope?.error.details?.field,
                 requestID: requestID
             )
         }

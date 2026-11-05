@@ -236,7 +236,7 @@ actor UploadQueue {
         switch error {
         case .transport, .invalidResponse, .rateLimited:
             return true
-        case .server(let status, _, _, _):
+        case .server(let status, _, _, _, _):
             return [408, 425, 500, 502, 503, 504].contains(status)
         case .unauthorized, .forbidden, .notFound, .invalidURL, .decoding:
             return false
