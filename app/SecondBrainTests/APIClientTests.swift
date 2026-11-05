@@ -78,6 +78,39 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(components.queryItems?.first(where: { $0.name == "limit" })?.value, "5")
     }
 
+    func testSearchSendsSourceAndDateFilters() async throws {
+        StubURLProtocol.setHandler { _ in
+            .init(body: Data(#"{"items":[],"total":0,"query":"x","limit":8}"#.utf8))
+        }
+        let since = Date(timeIntervalSince1970: 1_793_820_000)
+        let until = Date(timeIntervalSince1970: 1_793_906_400)
+
+        _ = try await client.search(
+            query: "x",
+            projectKey: "github.com/example/repo",
+            source: "jarvis",
+            since: since,
+            until: until
+        )
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        let components = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+        )
+        let items = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+                item.value.map { (item.name, $0) }
+            }
+        )
+        XCTAssertEqual(items["q"], "x")
+        XCTAssertEqual(items["project_key"], "github.com/example/repo")
+        XCTAssertEqual(items["source"], "jarvis")
+        let parsedSince = try XCTUnwrap(APIDate.parse(try XCTUnwrap(items["since"])))
+        let parsedUntil = try XCTUnwrap(APIDate.parse(try XCTUnwrap(items["until"])))
+        XCTAssertEqual(parsedSince.timeIntervalSince1970, since.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(parsedUntil.timeIntervalSince1970, until.timeIntervalSince1970, accuracy: 0.001)
+    }
+
     func testUnauthorizedMapsToUnauthorizedError() async {
         let body = Data(#"{"error":{"code":"unauthorized","message":"missing token","request_id":"req_1"}}"#.utf8)
         StubURLProtocol.setHandler { _ in .init(status: 401, body: body) }

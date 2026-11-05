@@ -67,7 +67,8 @@ menu bar или кнопку Quit.
   существующие файлы при старте, игнор `*.tmp` и скрытых файлов;
 - `UploadQueue` — Swift actor: группировка по `external_id`, самый свежий бандл,
   `Idempotency-Key = bundle_id`, retry с full jitter, `failed/`, счётчики;
-- `AppState` — `@Observable`-состояние подключения, ошибок и «нужен новый токен».
+- `AppState` — `@Observable`-состояние подключения, ошибок и «нужен новый токен»;
+  read-only клиент использует `ui`-токен, загрузка — `opencode`-токен.
 
 `AppState.checkHealth(using:)` не требует токена; `loadStats(using:)` проверяет,
 что сохранённый токен ещё работает.
@@ -127,8 +128,31 @@ Settings показывает и меняет:
 - статус плагина, статус MCP и кнопку установки/переустановки.
 
 Для UI-тестов и нестандартных установок доступны переменные окружения
-`SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode) и `SECOND_BRAIN_PLUGIN_SOURCE`
-(каталог с файлами плагина).
+`SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode), `SECOND_BRAIN_PLUGIN_SOURCE`
+(каталог с файлами плагина), `SECOND_BRAIN_UI_TOKEN` (подменить `ui`-токен в
+Debug), `SECOND_BRAIN_UI_MOCK=1` (in-process mock API), `SECOND_BRAIN_UI_QUERY`
+и `SECOND_BRAIN_UI_RAW_QUERY` (стартовый запрос и raw-фильтр для UI-тестов).
+
+## Поиск и карточка
+
+Главное окно — двухколоночный интерфейс: слева статус, очередь загрузки и
+настройки, справа поиск памяти.
+
+- Запрос отправляется с debounce 300 мс; пустая строка не делает запрос.
+- Фильтры: проект (из `/api/v1/projects`), источник (`opencode`/`jarvis`) и
+  дата (`сегодня`, 7/30/90 дней). Параметры уходят в `GET /api/v1/search`.
+- `⌘K` фокусирует поле, `↑`/`↓` переключают результаты, `Esc` очищает запрос,
+  когда поле в фокусе. Мышь работает так же.
+- Результаты — карточки с источником, проектом, датой, summary и keywords.
+  Первый результат выбирается автоматически и подгружает полную запись через
+  `GET /api/v1/records/{id}`.
+- Detail показывает title/summary/questions/keywords/atoms, проект, источник,
+  дату и raw_text. В raw_text есть поиск по строкам с числом совпадений и
+  кнопка копирования полного текста в clipboard.
+- Есть состояния idle/loading/empty/error с retry; цвета и материалы системные,
+  поэтому тёмная и светлая темы поддерживаются без отдельных палитр.
+- Ключевые элементы имеют accessibility labels и identifiers; одинаковые
+  identifiers используются UI-тестами (`search.*`, `record.*`).
 
 ## Spool watcher и UploadQueue
 

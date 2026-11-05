@@ -1,67 +1,16 @@
-import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 64, weight: .light))
-                .foregroundStyle(.tint)
-
-            VStack(spacing: 6) {
-                Text("Second Brain")
-                    .font(.largeTitle.bold())
-                Text("Локальная память для OpenCode и Jarvis")
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(appState.statusText)
-                .font(.callout)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(.quaternary, in: Capsule())
-
-            if let health = appState.health {
-                Text("Версия \(health.version) · схема \(health.schemaVersion)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Text(appState.integrationSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("main.integrationSummary")
-
-            if appState.isConfigured {
-                UploadQueueView()
-                    .frame(maxWidth: 560)
-            }
-
-            if let errorMessage = appState.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-
-            HStack(spacing: 12) {
-                if !appState.isConfigured {
-                    Button("Настроить…") {
-                        appState.presentOnboardingForRotation()
-                    }
-                }
-                SettingsLink {
-                    Text("Settings…")
-                }
-                Button("Quit") {
-                    NSApp.terminate(nil)
-                }
-            }
-            .padding(.top, 6)
+        HSplitView {
+            AppSidebarView()
+                .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
+            SearchWorkspaceView()
+                .frame(minWidth: 680)
         }
-        .padding(32)
-        .frame(minWidth: 560, minHeight: 600)
+        .frame(minWidth: 980, minHeight: 640)
         .task {
             await appState.bootstrap()
         }

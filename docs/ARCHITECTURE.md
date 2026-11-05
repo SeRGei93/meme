@@ -448,27 +448,35 @@ app/
     App/
       SecondBrainApp.swift
       AppState.swift
-      MenuBar.swift
+      AppDelegate.swift
     Features/
+      Main/
+        ContentView.swift
+        AppSidebarView.swift
+        UploadQueueSidebarView.swift
       Onboarding/
-      Dashboard/
+        OnboardingView.swift
       Search/
-      Records/
-      Graph/
-      Projects/
-      Agents/
+        SearchWorkspaceView.swift
+        SearchModel.swift
+        RecordDetailView.swift
       Settings/
+        SettingsView.swift
     Core/
       APIClient.swift
+      APIModels.swift
+      RawTextSearch.swift
+      APIError.swift
       KeychainStore.swift
       SpoolBundle.swift
       SpoolWatcher.swift
       UploadQueue.swift
+      UploadStatus.swift
       ConfigStore.swift
       PluginInstaller.swift
       OpenCodeConfig.swift
       OpenCodePaths.swift
-      Models.swift
+      UITestURLProtocol.swift   # DEBUG-only in-process mock for UI tests
 ```
 
 ## 6.3 OpenCode plugin
