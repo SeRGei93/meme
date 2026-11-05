@@ -311,6 +311,7 @@ flowchart TB
         SHELL["App Shell<br/>window + menu bar"]
         ONB["Onboarding"]
         DASH["Dashboard"]
+        CLIENTS["Clients"]
         SEARCH["Search"]
         REC["Record detail"]
         GRAPH["Graph"]
@@ -334,6 +335,7 @@ flowchart TB
     WATCH --> UP --> API --> SRV
     SHELL --> API
     DASH --> API
+    CLIENTS --> API
     SEARCH --> API
     REC --> API
     GRAPH --> API
@@ -347,7 +349,7 @@ flowchart TB
     classDef data fill:#8957e5,stroke:#d2a8ff,color:#ffffff
     classDef external fill:#6e7681,stroke:#c9d1d9,color:#ffffff
 
-    class SHELL,ONB,DASH,SEARCH,REC,GRAPH,SET ui
+    class SHELL,ONB,DASH,CLIENTS,SEARCH,REC,GRAPH,SET ui
     class API,WATCH,UP,KC,CFG,INST core
     class SP data
     class SRV external
@@ -365,6 +367,7 @@ flowchart TB
 | Graph | Визуализация связей |
 | Projects | Список проектов |
 | Agents | Статус источников и клиентов: активность, токены, плагин |
+| Clients | Список клиентов, source/scopes, отзыв токена |
 | Settings | URL, токены, launch at login |
 | API Client | HTTP-клиент к `brain` |
 | Spool Watcher | Наблюдение за `spool/` |
@@ -470,6 +473,9 @@ app/
       Agents/
         AgentsView.swift
         AgentsModel.swift
+      Clients/
+        ClientsView.swift
+        ClientsModel.swift
       Graph/
         GraphView.swift
         GraphModel.swift

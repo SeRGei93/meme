@@ -43,6 +43,8 @@ struct ContentView: View {
             }
         case .agents:
             AgentsView()
+        case .clients:
+            ClientsView()
         case .graph:
             GraphView()
         }

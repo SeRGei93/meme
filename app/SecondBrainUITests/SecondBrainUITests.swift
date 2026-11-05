@@ -183,6 +183,86 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["agents.queue.failed"].exists)
     }
 
+    func testClientsListProtectsTheAppClientAndRevokesAfterConfirmation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-clients-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        let config: [String: Any] = [
+            "server_url": "https://ui.test",
+            "app_clients": [
+                "ui": ["id": 1, "name": "second-brain-app"],
+                "opencode": ["id": 2, "name": "opencode-macbook"],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = configuredApp(
+            configDirectory: configDirectory,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "clients"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("clients.row.1", in: app).waitForExistence(timeout: 20))
+        XCTAssertEqual(element("clients.activeCount", in: app).value as? String, "Активных: 4")
+        XCTAssertEqual(element("clients.revokedCount", in: app).value as? String, "Отозвано: 0")
+        XCTAssertEqual(app.staticTexts["clients.name.1"].value as? String, "second-brain-app")
+        XCTAssertEqual(element("clients.status.1", in: app).value as? String, "Активен")
+        XCTAssertTrue(element("clients.badge.1", in: app).exists)
+        XCTAssertTrue(element("clients.badge.2", in: app).exists)
+        XCTAssertEqual(element("clients.badge.2", in: app).value as? String, "Локальный OpenCode")
+        XCTAssertTrue(element("clients.protected.1", in: app).exists)
+        XCTAssertEqual(element("clients.scopes.3", in: app).value as? String, "ingest")
+        XCTAssertEqual(element("clients.lastSeen.3", in: app).value as? String, "Активность: Нет данных")
+        XCTAssertFalse(
+            app.buttons["clients.revoke.1"].exists,
+            "the app must not be able to revoke its own UI client"
+        )
+
+        XCTAssertTrue(
+            (element("clients.source.3", in: app).value as? String)?.contains("jarvis") == true
+        )
+        let revoke = app.buttons["clients.revoke.3"]
+        XCTAssertTrue(revoke.exists)
+        revoke.click()
+
+        let confirm = app.sheets.buttons["Отозвать"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.click()
+
+        let revoked = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Отозван"),
+            object: element("clients.status.3", in: app)
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [revoked], timeout: 10), .completed)
+        XCTAssertFalse(app.buttons["clients.revoke.3"].exists)
+        XCTAssertTrue(element("clients.revokedAt.3", in: app).exists)
+        XCTAssertEqual(element("clients.activeCount", in: app).value as? String, "Активных: 3")
+        XCTAssertEqual(element("clients.revokedCount", in: app).value as? String, "Отозвано: 1")
+        XCTAssertGreaterThan(
+            element("clients.row.3", in: app).frame.minY,
+            element("clients.row.1", in: app).frame.minY,
+            "revoked clients belong to the panel below active ones"
+        )
+    }
+
+    func testClientsShowsEmptyState() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "clients",
+            uiClients: "empty"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("clients.empty", in: app).waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Клиентов пока нет"].exists)
+    }
+
     func testGraphRendersNodesFiltersBySourceAndOpensCard() throws {
         let app = configuredApp(
             uiToken: "sb_ui_test",
@@ -597,6 +677,7 @@ final class SecondBrainUITests: XCTestCase {
         uiSection: String? = nil,
         uiTokens: String? = nil,
         uiGraph: String? = nil,
+        uiClients: String? = nil,
         uiMenuQuery: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -633,6 +714,9 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let uiGraph {
             app.launchEnvironment["SECOND_BRAIN_UI_GRAPH"] = uiGraph
+        }
+        if let uiClients {
+            app.launchEnvironment["SECOND_BRAIN_UI_CLIENTS"] = uiClients
         }
         if let uiMenuQuery {
             app.launchEnvironment["SECOND_BRAIN_UI_MENU_QUERY"] = uiMenuQuery

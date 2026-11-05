@@ -414,6 +414,11 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] OpenCode: last capture, plugin status;
   - [x] Jarvis: last memory, token status;
   - [x] очередь.
+- [x] Clients:
+  - [x] список всех клиентов, включая отозванных;
+  - [x] source, kind, scopes, последняя активность;
+  - [x] отзыв с подтверждением;
+  - [x] UI-клиент приложения защищён от отзыва из UI.
 - [x] Graph:
   - [x] Canvas + force-directed layout;
   - [x] узлы/связи;

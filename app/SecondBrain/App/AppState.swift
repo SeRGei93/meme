@@ -475,6 +475,13 @@ final class AppState {
         makeClient(for: KeychainStore.Account.ui)
     }
 
+    /// Admin client for client inventory and revocation. It is the same `ui`
+    /// token as reads; the name makes the write capability explicit at call
+    /// sites so a delete never hides behind a "read" helper.
+    func makeAdminClient() -> APIClient? {
+        makeClient(for: KeychainStore.Account.ui)
+    }
+
     private func makeClient(for account: String) -> APIClient? {
         guard let config = try? configStore.load(),
               let url = config.serverURL,
