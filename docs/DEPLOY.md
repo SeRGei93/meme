@@ -92,7 +92,7 @@ Dokploy/Traefik сам выпустит сертификат после того
 DOMAIN=https://brain.example.com
 
 curl -fsS "$DOMAIN/health" | jq
-# {"status":"ok","version":"<commit-sha>","schema_version":3,...,"database":{"status":"ok","fts5":true}}
+# {"status":"ok","version":"<commit-sha>","schema_version":4,...,"database":{"status":"ok","fts5":true}}
 
 curl -sS -o /dev/null -w '%{http_code}\n' "$DOMAIN/api/v1/stats"          # 401
 curl -sS "$DOMAIN/api/v1/stats" -H "Authorization: Bearer $BRAIN_ADMIN_TOKEN" | jq

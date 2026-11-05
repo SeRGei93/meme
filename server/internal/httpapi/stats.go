@@ -22,13 +22,8 @@ type recordStatsResponse struct {
 	Total        int                      `json:"total"`
 	Final        int                      `json:"final"`
 	Draft        int                      `json:"draft"`
-	BySource     sourceCountsResponse     `json:"by_source"`
+	BySource     map[string]int           `json:"by_source"`
 	ByCardStatus cardStatusCountsResponse `json:"by_card_status"`
-}
-
-type sourceCountsResponse struct {
-	OpenCode int `json:"opencode"`
-	Jarvis   int `json:"jarvis"`
 }
 
 type cardStatusCountsResponse struct {
@@ -68,13 +63,10 @@ func (s *server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 func toStatsResponse(stats store.Stats) statsResponse {
 	return statsResponse{
 		Records: recordStatsResponse{
-			Total: stats.Records.Total,
-			Final: stats.Records.Final,
-			Draft: stats.Records.Draft,
-			BySource: sourceCountsResponse{
-				OpenCode: stats.Records.BySource.OpenCode,
-				Jarvis:   stats.Records.BySource.Jarvis,
-			},
+			Total:    stats.Records.Total,
+			Final:    stats.Records.Final,
+			Draft:    stats.Records.Draft,
+			BySource: stats.Records.BySource,
 			ByCardStatus: cardStatusCountsResponse{
 				Heuristic: stats.Records.ByCardStatus.Heuristic,
 				Queued:    stats.Records.ByCardStatus.Queued,

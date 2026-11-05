@@ -33,7 +33,9 @@
 - `GET /mcp` используется только для server-initiated сообщений; v1 их не отправляет и может
   отвечать `405`.
 - OAuth не используется. Токен — обычный bearer-токен из `POST /api/v1/clients`
-  (`kind=opencode` или `kind=jarvis`).
+  (`kind=agent`; устаревшие `opencode`/`jarvis` принимаются и сохраняются как `agent`).
+- `source` — уникальная метка клиента, выданная вместе с токеном. OpenCode, Jarvis,
+  Claude и любой другой агент подключаются одинаково.
 
 ## 2. Аутентификация, source и scope
 
@@ -45,10 +47,11 @@ HTTP-слой проверяет токен до JSON-RPC:
 | У токена нет нужного scope | `403` + `ErrorEnvelope` (`forbidden`, `details.required_any_of`) |
 | Превышен rate limit | `429` + `ErrorEnvelope` (`rate_limited`) |
 
-`source` всегда определяется токеном: `opencode` для `kind=opencode`, `jarvis` для
-`kind=jarvis`. В аргументах инструментов **нельзя задать источник записи**; поле `source`
-есть только у `search` и работает как фильтр по уже сохранённым записям. Любая попытка
-передать `source` в `remember` — `validation_failed`.
+`source` всегда определяется клиентом токена. В аргументах инструментов **нельзя
+задать источник записи**; поле `source` есть только у `search` и работает как фильтр
+по уже сохранённым записям. Любая попытка передать `source` в `remember` —
+`validation_failed`. Фильтр принимает произвольную метку, включая `opencode-macbook`,
+`jarvis` или `claude-prod`.
 
 | Инструмент | Scope | Read-only | Идемпотентный |
 |---|---|---|---|
@@ -157,7 +160,7 @@ HTTP `200` (у метода — JSON-RPC error, у инструмента — `i
       "query": { "type": "string", "minLength": 1, "maxLength": 500 },
       "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },
       "project": { "type": "string", "minLength": 1, "maxLength": 500 },
-      "source": { "type": "string", "enum": ["opencode", "jarvis"] }
+      "source": { "type": "string", "minLength": 1, "maxLength": 100 }
     }
   },
   "outputSchema": {

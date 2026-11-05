@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
 
@@ -119,8 +120,17 @@ func parseGraphParams(w http.ResponseWriter, r *http.Request) (store.GraphParams
 		return invalid("project_key", "project_key must be at most "+strconv.Itoa(graphMaxKeyRunes)+" characters")
 	}
 
+	source := strings.TrimSpace(query.Get("source"))
+	if query.Has("source") && source == "" {
+		return invalid("source", "source must not be empty")
+	}
+	if utf8.RuneCountInString(source) > auth.MaxSourceQueryLen {
+		return invalid("source", "source must be at most "+strconv.Itoa(auth.MaxSourceQueryLen)+" characters")
+	}
+
 	return store.GraphParams{
 		ProjectKey: projectKey,
+		Source:     source,
 		Limit:      limit,
 		MinWeight:  minWeight,
 	}, true

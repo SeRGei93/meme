@@ -37,16 +37,16 @@ func TestOpenCreatesDatabaseAndAppliesMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion() error = %v", err)
 	}
-	if version != 3 {
-		t.Errorf("SchemaVersion() = %d, want 3", version)
+	if version != 4 {
+		t.Errorf("SchemaVersion() = %d, want 4", version)
 	}
 
 	health, err := st.Health(context.Background())
 	if err != nil {
 		t.Fatalf("Health() error = %v", err)
 	}
-	if health.SchemaVersion != 3 {
-		t.Errorf("Health().SchemaVersion = %d, want 3", health.SchemaVersion)
+	if health.SchemaVersion != 4 {
+		t.Errorf("Health().SchemaVersion = %d, want 4", health.SchemaVersion)
 	}
 	if !health.FTS5 {
 		t.Error("Health().FTS5 = false, want true")
@@ -74,8 +74,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion() error = %v", err)
 	}
-	if version != 3 {
-		t.Errorf("SchemaVersion() = %d, want 3", version)
+	if version != 4 {
+		t.Errorf("SchemaVersion() = %d, want 4", version)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestHealthFailsAfterClose(t *testing.T) {
 func TestCreateClientReturnsTokenAndLookupByHashFindsIt(t *testing.T) {
 	st, _ := openTestStore(t)
 
-	client, token, err := st.CreateClient(context.Background(), "opencode-macbook", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, token, err := st.CreateClient(context.Background(), "opencode-macbook", auth.KindOpenCode, "opencode", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -103,13 +103,16 @@ func TestCreateClientReturnsTokenAndLookupByHashFindsIt(t *testing.T) {
 	if client.Name != "opencode-macbook" {
 		t.Errorf("client.Name = %q, want %q", client.Name, "opencode-macbook")
 	}
-	if client.Kind != auth.KindOpenCode {
-		t.Errorf("client.Kind = %q, want %q", client.Kind, auth.KindOpenCode)
+	if client.Kind != auth.KindAgent {
+		t.Errorf("client.Kind = %q, want %q", client.Kind, auth.KindAgent)
+	}
+	if client.Source != "opencode" {
+		t.Errorf("client.Source = %q, want opencode", client.Source)
 	}
 	if client.CreatedAt.IsZero() {
 		t.Error("client.CreatedAt is zero")
 	}
-	if len(token) < len("sb_opencode_") {
+	if len(token) < len("sb_agent_") {
 		t.Fatalf("token = %q, want a generated token", token)
 	}
 
@@ -123,8 +126,8 @@ func TestCreateClientReturnsTokenAndLookupByHashFindsIt(t *testing.T) {
 	if len(found.Scopes) != 1 || found.Scopes[0] != auth.ScopeIngest {
 		t.Errorf("found.Scopes = %v, want [ingest]", found.Scopes)
 	}
-	if source, ok := found.Source(); !ok || source != "opencode" {
-		t.Errorf("found.Source() = (%q, %v), want (opencode, true)", source, ok)
+	if source, ok := found.KnowledgeSource(); !ok || source != "opencode" {
+		t.Errorf("found.KnowledgeSource() = (%q, %v), want (opencode, true)", source, ok)
 	}
 
 	if _, err := st.FindClientByTokenHash(context.Background(), auth.HashToken("sb_ui_wrong")); !errors.Is(err, store.ErrNotFound) {
@@ -132,14 +135,70 @@ func TestCreateClientReturnsTokenAndLookupByHashFindsIt(t *testing.T) {
 	}
 }
 
+func TestCreateClientDerivesSourceFromName(t *testing.T) {
+	st, _ := openTestStore(t)
+
+	client, _, err := st.CreateClient(context.Background(), "MacBook.local", auth.KindAgent, "", []auth.Scope{auth.ScopeMCPRead})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+	if client.Source != "macbook-local" {
+		t.Errorf("client.Source = %q, want macbook-local", client.Source)
+	}
+}
+
+func TestCreateClientRejectsDuplicateActiveSource(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	if _, _, err := st.CreateClient(ctx, "first", auth.KindAgent, "shared", []auth.Scope{auth.ScopeIngest}); err != nil {
+		t.Fatalf("first CreateClient() error = %v", err)
+	}
+	if _, _, err := st.CreateClient(ctx, "second", auth.KindAgent, "shared", []auth.Scope{auth.ScopeIngest}); !errors.Is(err, store.ErrClientSourceTaken) {
+		t.Errorf("second CreateClient() error = %v, want ErrClientSourceTaken", err)
+	}
+}
+
+func TestRevokedSourceCanBeReused(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	first, _, err := st.CreateClient(ctx, "first", auth.KindAgent, "jarvis", []auth.Scope{auth.ScopeIngest})
+	if err != nil {
+		t.Fatalf("first CreateClient() error = %v", err)
+	}
+	if err := st.RevokeClient(ctx, first.ID); err != nil {
+		t.Fatalf("RevokeClient() error = %v", err)
+	}
+	second, _, err := st.CreateClient(ctx, "second", auth.KindAgent, "jarvis", []auth.Scope{auth.ScopeIngest})
+	if err != nil {
+		t.Fatalf("second CreateClient() after revoke error = %v", err)
+	}
+	if second.Source != "jarvis" {
+		t.Errorf("second.Source = %q, want jarvis", second.Source)
+	}
+}
+
+func TestUIClientHasNoSource(t *testing.T) {
+	st, _ := openTestStore(t)
+
+	client, _, err := st.CreateClient(context.Background(), "app", auth.KindUI, "", []auth.Scope{auth.ScopeUI})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+	if _, ok := client.KnowledgeSource(); ok {
+		t.Errorf("KnowledgeSource() = %q, true, want no source", client.Source)
+	}
+}
+
 func TestCreateClientRejectsDuplicateActiveName(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 
-	if _, _, err := st.CreateClient(ctx, "jarvis", auth.KindJarvis, []auth.Scope{auth.ScopeIngest}); err != nil {
+	if _, _, err := st.CreateClient(ctx, "jarvis", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest}); err != nil {
 		t.Fatalf("first CreateClient() error = %v", err)
 	}
-	if _, _, err := st.CreateClient(ctx, "jarvis", auth.KindJarvis, []auth.Scope{auth.ScopeIngest}); !errors.Is(err, store.ErrClientNameTaken) {
+	if _, _, err := st.CreateClient(ctx, "jarvis", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest}); !errors.Is(err, store.ErrClientNameTaken) {
 		t.Errorf("second CreateClient() error = %v, want ErrClientNameTaken", err)
 	}
 }
@@ -148,7 +207,7 @@ func TestRevokeClientIsImmediateAndIdempotent(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 
-	client, token, err := st.CreateClient(ctx, "revoked-client", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, token, err := st.CreateClient(ctx, "revoked-client", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -175,11 +234,11 @@ func TestListClientsReturnsActiveAndRevokedWithoutTokenHashes(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 
-	active, _, err := st.CreateClient(ctx, "active", auth.KindJarvis, []auth.Scope{auth.ScopeMCPRead})
+	active, _, err := st.CreateClient(ctx, "active", auth.KindJarvis, "", []auth.Scope{auth.ScopeMCPRead})
 	if err != nil {
 		t.Fatalf("CreateClient(active) error = %v", err)
 	}
-	revoked, _, err := st.CreateClient(ctx, "revoked", auth.KindUI, []auth.Scope{auth.ScopeUI})
+	revoked, _, err := st.CreateClient(ctx, "revoked", auth.KindUI, "", []auth.Scope{auth.ScopeUI})
 	if err != nil {
 		t.Fatalf("CreateClient(revoked) error = %v", err)
 	}
@@ -210,17 +269,20 @@ func TestCreateClientRejectsInvalidInput(t *testing.T) {
 		name   string
 		client string
 		kind   auth.Kind
+		source string
 		scopes []auth.Scope
 	}{
-		{"empty name", "", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest}},
-		{"invalid kind", "client", auth.Kind("robot"), []auth.Scope{auth.ScopeIngest}},
-		{"no scopes", "client", auth.KindOpenCode, nil},
-		{"invalid scope", "client", auth.KindOpenCode, []auth.Scope{auth.Scope("root")}},
-		{"duplicate scope", "client", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest, auth.ScopeIngest}},
+		{"empty name", "", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest}},
+		{"invalid kind", "client", auth.Kind("robot"), "", []auth.Scope{auth.ScopeIngest}},
+		{"invalid source", "client", auth.KindAgent, "Bad Source", []auth.Scope{auth.ScopeIngest}},
+		{"source on ui", "client", auth.KindUI, "source", []auth.Scope{auth.ScopeUI}},
+		{"no scopes", "client", auth.KindOpenCode, "", nil},
+		{"invalid scope", "client", auth.KindOpenCode, "", []auth.Scope{auth.Scope("root")}},
+		{"duplicate scope", "client", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest, auth.ScopeIngest}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := st.CreateClient(ctx, tt.client, tt.kind, tt.scopes); err == nil {
+			if _, _, err := st.CreateClient(ctx, tt.client, tt.kind, tt.source, tt.scopes); err == nil {
 				t.Fatal("CreateClient() error = nil, want error")
 			}
 		})

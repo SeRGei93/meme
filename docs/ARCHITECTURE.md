@@ -2,7 +2,7 @@
 
 > Статус: целевая архитектура (draft)  
 > Дата: 2026-11-03  
-> Область: центральная память для OpenCode и Jarvis  
+> Область: центральная память для любых агентов по токену; OpenCode и Jarvis — первые интеграции
 > Деплой: Dokploy + Let's Encrypt, S3-совместимое хранилище для бэкапов  
 > Roadmap: [ROADMAP.md](ROADMAP.md)
 
@@ -15,7 +15,7 @@ Second Brain — это центральная база знаний, котор
 - **Сервер на Go** владеет SQLite, полнотекстовым поиском FTS5, генерацией карточек, очередью и MCP.
 - **Локальное приложение на SwiftUI** — единственный исполняемый файл на macOS. Оно показывает UI, следит за локальной папкой `spool/` и отправляет данные на сервер.
 - **Плагин OpenCode** — тонкий TypeScript-адаптер. Он не является отдельным процессом и не отправляет бандлы: только собирает нормализованные сессии и складывает JSON-бандлы в `spool/`. В сеть плагин ходит лишь по явной команде `/remember` (`POST /api/v1/memories`).
-- **Jarvis** живёт на сервере и пишет в память через MCP `remember` или HTTP `/api/v1/memories`.
+- **Любой агент** с токеном может писать и читать память через MCP; Jarvis — первый внешний агент, который живёт на отдельном сервере и подключается по MCP. HTTP `/api/v1/memories` остаётся fallback. OpenCode и Jarvis не являются границей продукта: source — это метка конкретного клиента.
 - **Поиск и карточки** выполняются только на сервере.
 - **Бэкапы** — полные снимки SQLite каждые 6 часов в S3-бакет `meme`, хранится 20 последних. Без UI, без API, восстановление только через CLI на сервере.
 
@@ -27,7 +27,7 @@ Second Brain — это центральная база знаний, котор
 
 | Решение | Значение |
 |---|---|
-| Источники | Только OpenCode и Jarvis |
+| Агенты | Любой клиент с токеном; OpenCode и Jarvis — первые интеграции |
 | Локальная часть | Одно `.app`-приложение на SwiftUI, без Docker и без фонового демона |
 | Сервер | Go, один контейнер в Dokploy |
 | База | SQLite + FTS5, один writer |
@@ -98,7 +98,7 @@ brain ──► S3 bucket meme (20 полных бэкапов, каждые 6 �
 |---|---|---|
 | Пользователь | Person | Работает в OpenCode, общается с Jarvis, пользуется macOS-приложением |
 | OpenCode | External system | Источник сессий и MCP-клиент |
-| Jarvis | External system | Удалённый агент, пишет память по команде |
+| Jarvis | External system | Удалённый агент, пишет память по команде через свой токен |
 | Second Brain | System | Центральная память |
 | S3 / MinIO | External system | Хранилище бэкапов |
 | LLM Provider | External system | Генерация карточек |
@@ -678,7 +678,7 @@ sequenceDiagram
     participant LLM as LLM
 
     J->>BR: MCP remember / POST /api/v1/memories
-    BR->>BR: auth -> source=jarvis
+    BR->>BR: auth -> source=client.source
     BR->>BR: mask
     alt card provided
         BR->>DB: upsert record
@@ -780,19 +780,23 @@ PRAGMA busy_timeout = 5000;
 CREATE TABLE clients (
     id            INTEGER PRIMARY KEY,
     name          TEXT NOT NULL,          -- unique among non-revoked clients
-    kind          TEXT NOT NULL CHECK (kind IN ('opencode', 'jarvis', 'ui', 'admin')),
+    kind          TEXT NOT NULL CHECK (kind IN ('agent', 'ui', 'admin')),
+    source        TEXT,                   -- unique among active agents; null for ui/admin
     token_hash    TEXT NOT NULL UNIQUE,
     scopes        TEXT NOT NULL,          -- ingest,mcp:read,mcp:write,admin,ui
     created_at    TEXT NOT NULL,
     last_seen_at  TEXT,
-    revoked_at    TEXT
+    revoked_at    TEXT,
+    CHECK ((kind = 'agent' AND source IS NOT NULL) OR (kind <> 'agent' AND source IS NULL))
 );
 
 CREATE UNIQUE INDEX clients_active_name ON clients(name) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX clients_active_source ON clients(source)
+    WHERE revoked_at IS NULL AND source IS NOT NULL;
 
 CREATE TABLE projects (
     id          INTEGER PRIMARY KEY,
-    key         TEXT NOT NULL UNIQUE,     -- opencode:<projectID> | jarvis | git remote
+    key         TEXT NOT NULL UNIQUE,     -- git remote | opencode:<projectID> | local:<host>:<path>
     name        TEXT NOT NULL,
     path        TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL
@@ -801,7 +805,7 @@ CREATE TABLE projects (
 CREATE TABLE records (
     id              INTEGER PRIMARY KEY,
     client_id       INTEGER NOT NULL REFERENCES clients(id),
-    source          TEXT NOT NULL,        -- opencode | jarvis
+    source          TEXT NOT NULL,        -- label of the owning client
     external_id     TEXT NOT NULL,        -- session_id / event_id
     project_id      INTEGER REFERENCES projects(id),
     kind            TEXT NOT NULL DEFAULT 'session', -- session | memory
@@ -975,8 +979,8 @@ ingest
 
 | Метод | Путь | Доступ | Назначение |
 |---|---|---|---|
-| `POST` | `/api/v1/ingest` | ingest | Сессии OpenCode |
-| `POST` | `/api/v1/memories` | ingest | Структурированная память Jarvis |
+| `POST` | `/api/v1/ingest` | ingest | Сессии OpenCode (spool adapter) |
+| `POST` | `/api/v1/memories` | ingest | Память любого агента (HTTP fallback) |
 | `GET` | `/api/v1/search?q=` | ui/mcp:read | Поиск |
 | `GET` | `/api/v1/records/{id}` | ui/mcp:read | Полная запись |
 | `GET` | `/api/v1/projects` | ui/mcp:read | Проекты |
@@ -1036,12 +1040,22 @@ MCP endpoint: `https://brain.example.com/mcp`.
 | Scope | Кто использует | Что разрешает |
 |---|---|---|
 | `ingest` | OpenCode plugin / app | `POST /ingest`, `POST /memories` |
-| `mcp:read` | OpenCode, Jarvis | `search`, `get_record`, `list_projects`, `stats` |
-| `mcp:write` | OpenCode, Jarvis | `remember` |
+| `mcp:read` | Любой агент | `search`, `get_record`, `list_projects`, `stats` |
+| `mcp:write` | Любой агент | `remember` |
 | `ui` | SecondBrain.app | Чтение, статистика, граф |
 | `admin` | SecondBrain.app | Управление клиентами, очередь |
 
-Источник (`source`) всегда определяется по токену. Клиент не может подделать `source` в теле запроса.
+Источник (`source`) всегда определяется клиентом, которому принадлежит токен. Клиент не может подделать `source` в теле запроса. У активных клиентов source уникален; у revoked-клиента метка остаётся в истории, и после отзыва её можно выдать новому клиенту для ротации.
+
+## 9.5 Клиенты и источники
+
+- **Клиент** — единица доступа: имя, уникальный source, scopes, статус. Токен показывается один раз.
+- **Source** задаётся при выпуске токена (по умолчанию — slug имени клиента) и попадает в каждую запись этого клиента.
+- **Выпуск токенов** — только admin-токеном через `POST /api/v1/clients`; открытой регистрации и self-service нет.
+- **MCP** — основной путь для удалённых агентов; `/api/v1/memories` — HTTP fallback; `/api/v1/ingest` — адаптер spool-бандлов OpenCode.
+- **OpenCode и Jarvis** — обычные клиенты с source `opencode-macbook` и `jarvis` (пример); новых агентов не нужно добавлять в код.
+
+Решение зафиксировано в [ADR-11](adr/0011-generic-clients-and-sources.md).
 
 ---
 
@@ -1265,12 +1279,13 @@ brain restore --object brain-2026-11-03T06-00-00Z.db.zst --db /data/brain.db
 | ADR-8 | Нет backup UI/API | Восстановление — редкая ручная операция |
 | ADR-9 | SwiftUI `.app` | Единственный локальный executable, нативный UI |
 | ADR-10 | Сервер в Dokploy | TLS, деплой, volume, логи |
+| ADR-11 | Клиенты и источники generic | Любой агент по токену; source уникален для клиента, выпуск только admin ([ADR](adr/0011-generic-clients-and-sources.md)) |
 
 ---
 
 # 15. Открытые вопросы
 
-1. **Jarvis**: MCP-клиент или только HTTP? Поддерживаем оба, но нужно подтвердить основной путь.
+1. ~~**Jarvis**: MCP-клиент или только HTTP?~~ Решено: MCP основной, HTTP — fallback (ADR-11).
 2. **Backfill**: вся история OpenCode или последние N месяцев? Влияет на стоимость LLM.
 3. **LLM**: провайдер, модель, месячный бюджет.
 4. **Доступ**: только HTTPS + токены или дополнительно ограничить по IP/Tailscale?

@@ -16,10 +16,10 @@ func TestGenerateTokenUsesContractFormat(t *testing.T) {
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
 
-	if !regexp.MustCompile(`^sb_opencode_[A-Za-z0-9_-]{43}$`).MatchString(token) {
-		t.Errorf("token = %q, want sb_opencode_ followed by 43 base64url characters", token)
+	if !regexp.MustCompile(`^sb_agent_[A-Za-z0-9_-]{43}$`).MatchString(token) {
+		t.Errorf("token = %q, want sb_agent_ followed by 43 base64url characters", token)
 	}
-	randomPart := token[len("sb_opencode_"):]
+	randomPart := token[len("sb_agent_"):]
 	raw, err := base64.RawURLEncoding.DecodeString(randomPart)
 	if err != nil {
 		t.Fatalf("token payload is not base64url: %v", err)
@@ -61,26 +61,52 @@ func TestHashTokenIsStable(t *testing.T) {
 	}
 }
 
-func TestKindSource(t *testing.T) {
+func TestNormalizeKind(t *testing.T) {
 	tests := []struct {
-		kind   auth.Kind
-		source string
-		ok     bool
-		valid  bool
+		kind auth.Kind
+		want string
 	}{
-		{auth.KindOpenCode, "opencode", true, true},
-		{auth.KindJarvis, "jarvis", true, true},
-		{auth.KindUI, "", false, true},
-		{auth.KindAdmin, "", false, true},
-		{auth.Kind("other"), "", false, false},
+		{auth.KindOpenCode, "agent"},
+		{auth.KindJarvis, "agent"},
+		{auth.KindAgent, "agent"},
+		{auth.KindUI, "ui"},
+		{auth.KindAdmin, "admin"},
+		{auth.Kind("other"), "other"},
 	}
 	for _, tt := range tests {
-		source, ok := tt.kind.Source()
-		if source != tt.source || ok != tt.ok {
-			t.Errorf("%q.Source() = (%q, %v), want (%q, %v)", tt.kind, source, ok, tt.source, tt.ok)
+		if got := string(auth.NormalizeKind(tt.kind)); got != tt.want {
+			t.Errorf("%q.Normalize() = %q, want %q", tt.kind, got, tt.want)
 		}
-		if got := tt.kind.Valid(); got != tt.valid {
-			t.Errorf("%q.Valid() = %v, want %v", tt.kind, got, tt.valid)
+	}
+
+	for _, kind := range []auth.Kind{auth.KindAgent, auth.KindOpenCode, auth.KindJarvis, auth.KindUI, auth.KindAdmin} {
+		if !kind.Valid() {
+			t.Errorf("%q.Valid() = false, want true", kind)
+		}
+	}
+	if auth.Kind("other").Valid() {
+		t.Error(`Kind("other").Valid() = true, want false`)
+	}
+	if !auth.KindAgent.AllowsSource() || auth.KindUI.AllowsSource() || auth.KindAdmin.AllowsSource() {
+		t.Error("AllowsSource() is wrong for agent/ui/admin")
+	}
+}
+
+func TestDeriveSource(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"opencode-macbook", "opencode-macbook"},
+		{"MacBook.local", "macbook-local"},
+		{"Claude Laptop", "claude-laptop"},
+		{"opencode:project", "opencode-project"},
+		{"---", "agent"},
+		{"", "agent"},
+	}
+	for _, tt := range tests {
+		if got := auth.DeriveSource(tt.name); got != tt.want {
+			t.Errorf("DeriveSource(%q) = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }
@@ -96,52 +122,6 @@ func TestScopeValid(t *testing.T) {
 	}
 }
 
-func TestValidateClient(t *testing.T) {
-	valid := []struct {
-		name   string
-		client string
-		kind   auth.Kind
-		scopes []auth.Scope
-	}{
-		{"opencode", "opencode-macbook", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest}},
-		{"jarvis", "jarvis", auth.KindJarvis, []auth.Scope{auth.ScopeIngest, auth.ScopeMCPRead, auth.ScopeMCPWrite}},
-		{"ui", "second-brain-app", auth.KindUI, []auth.Scope{auth.ScopeUI, auth.ScopeAdmin}},
-	}
-	for _, tt := range valid {
-		if err := auth.ValidateClient(tt.client, tt.kind, tt.scopes); err != nil {
-			t.Errorf("%s: ValidateClient() error = %v, want nil", tt.name, err)
-		}
-	}
-
-	invalid := []struct {
-		name   string
-		client string
-		kind   auth.Kind
-		scopes []auth.Scope
-		field  string
-	}{
-		{"missing name", "", auth.KindUI, []auth.Scope{auth.ScopeUI}, "name"},
-		{"name too long", strings.Repeat("a", 101), auth.KindUI, []auth.Scope{auth.ScopeUI}, "name"},
-		{"bad name", "bad name", auth.KindUI, []auth.Scope{auth.ScopeUI}, "name"},
-		{"bad kind", "client", auth.Kind("robot"), []auth.Scope{auth.ScopeUI}, "kind"},
-		{"no scopes", "client", auth.KindUI, nil, "scopes"},
-		{"too many scopes", "client", auth.KindUI, []auth.Scope{auth.ScopeUI, auth.ScopeAdmin, auth.ScopeIngest, auth.ScopeMCPRead, auth.ScopeMCPWrite, auth.ScopeUI}, "scopes"},
-		{"unknown scope", "client", auth.KindUI, []auth.Scope{auth.Scope("root")}, "scopes"},
-		{"duplicate scope", "client", auth.KindUI, []auth.Scope{auth.ScopeUI, auth.ScopeUI}, "scopes"},
-	}
-	for _, tt := range invalid {
-		err := auth.ValidateClient(tt.client, tt.kind, tt.scopes)
-		var validationError *auth.ValidationError
-		if !errors.As(err, &validationError) {
-			t.Errorf("%s: ValidateClient() error = %v, want *ValidationError", tt.name, err)
-			continue
-		}
-		if validationError.Field != tt.field {
-			t.Errorf("%s: field = %q, want %q", tt.name, validationError.Field, tt.field)
-		}
-	}
-}
-
 func TestPrincipalHasAnyScope(t *testing.T) {
 	principal := auth.Principal{Scopes: []auth.Scope{auth.ScopeIngest}}
 	if !principal.HasAnyScope([]auth.Scope{auth.ScopeAdmin, auth.ScopeIngest}) {
@@ -152,5 +132,58 @@ func TestPrincipalHasAnyScope(t *testing.T) {
 	}
 	if principal.HasAnyScope(nil) {
 		t.Error("HasAnyScope(nil) = true, want false")
+	}
+}
+
+func TestValidateClient(t *testing.T) {
+	valid := []struct {
+		name   string
+		client string
+		kind   auth.Kind
+		source string
+		scopes []auth.Scope
+	}{
+		{"opencode legacy", "opencode-macbook", auth.KindOpenCode, "opencode-macbook", []auth.Scope{auth.ScopeIngest}},
+		{"jarvis legacy", "jarvis", auth.KindJarvis, "jarvis", []auth.Scope{auth.ScopeIngest, auth.ScopeMCPRead, auth.ScopeMCPWrite}},
+		{"agent explicit source", "claude", auth.KindAgent, "claude-prod", []auth.Scope{auth.ScopeMCPRead}},
+		{"ui", "second-brain-app", auth.KindUI, "", []auth.Scope{auth.ScopeUI, auth.ScopeAdmin}},
+		{"admin", "ops", auth.KindAdmin, "", []auth.Scope{auth.ScopeAdmin}},
+	}
+	for _, tt := range valid {
+		if err := auth.ValidateClient(tt.client, tt.kind, tt.source, tt.scopes); err != nil {
+			t.Errorf("%s: ValidateClient() error = %v, want nil", tt.name, err)
+		}
+	}
+
+	invalid := []struct {
+		name   string
+		client string
+		kind   auth.Kind
+		source string
+		scopes []auth.Scope
+		field  string
+	}{
+		{"missing name", "", auth.KindUI, "", []auth.Scope{auth.ScopeUI}, "name"},
+		{"name too long", strings.Repeat("a", 101), auth.KindUI, "", []auth.Scope{auth.ScopeUI}, "name"},
+		{"bad name", "bad name", auth.KindUI, "", []auth.Scope{auth.ScopeUI}, "name"},
+		{"bad kind", "client", auth.Kind("robot"), "", []auth.Scope{auth.ScopeUI}, "kind"},
+		{"agent without source", "client", auth.KindAgent, "", []auth.Scope{auth.ScopeMCPRead}, "source"},
+		{"source on ui", "client", auth.KindUI, "jarvis", []auth.Scope{auth.ScopeUI}, "source"},
+		{"invalid source", "client", auth.KindAgent, "Bad Source", []auth.Scope{auth.ScopeUI}, "source"},
+		{"no scopes", "client", auth.KindUI, "", nil, "scopes"},
+		{"too many scopes", "client", auth.KindUI, "", []auth.Scope{auth.ScopeUI, auth.ScopeAdmin, auth.ScopeIngest, auth.ScopeMCPRead, auth.ScopeMCPWrite, auth.ScopeUI}, "scopes"},
+		{"unknown scope", "client", auth.KindUI, "", []auth.Scope{auth.Scope("root")}, "scopes"},
+		{"duplicate scope", "client", auth.KindUI, "", []auth.Scope{auth.ScopeUI, auth.ScopeUI}, "scopes"},
+	}
+	for _, tt := range invalid {
+		err := auth.ValidateClient(tt.client, tt.kind, tt.source, tt.scopes)
+		var validationError *auth.ValidationError
+		if !errors.As(err, &validationError) {
+			t.Errorf("%s: ValidateClient() error = %v, want *ValidationError", tt.name, err)
+			continue
+		}
+		if validationError.Field != tt.field {
+			t.Errorf("%s: field = %q, want %q", tt.name, validationError.Field, tt.field)
+		}
 	}
 }

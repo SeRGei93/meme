@@ -16,7 +16,7 @@ func openMemoryStore(t *testing.T) (*store.Store, int64) {
 	t.Helper()
 
 	st, _ := openTestStore(t)
-	client, _, err := st.CreateClient(context.Background(), "jarvis-writer", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(context.Background(), "jarvis-writer", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -28,7 +28,7 @@ func saveMemory(t *testing.T, st *store.Store, clientID int64, key string, reque
 
 	result, err := st.SaveMemory(context.Background(), store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: key,
 		Request:        request,
 		Now:            now,
@@ -81,7 +81,7 @@ func TestSaveMemoryWithAProvidedCardSkipsTheQueue(t *testing.T) {
 	if record.Kind != "memory" {
 		t.Errorf("Kind = %q, want memory", record.Kind)
 	}
-	if record.Source != auth.SourceJarvis {
+	if record.Source != "jarvis" {
 		t.Errorf("Source = %q, want jarvis", record.Source)
 	}
 	if record.ProjectKey != "second-brain" {
@@ -228,7 +228,7 @@ func TestSaveMemoryRejectsChangedContentForTheSameExternalID(t *testing.T) {
 	changed.RawText = "Decision: use pgvector instead."
 	_, err := st.SaveMemory(context.Background(), store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: "memory-4-changed",
 		Request:        changed,
 		Now:            now.Add(time.Minute),
@@ -254,7 +254,7 @@ func TestSaveMemoryRejectsAReusedIdempotencyKeyWithADifferentBody(t *testing.T) 
 
 	_, err := st.SaveMemory(context.Background(), store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: "memory-5",
 		Request:        memory.Request{ExternalID: "evt_other", RawText: "A different memory."},
 		Now:            now.Add(time.Minute),
@@ -375,7 +375,7 @@ func TestSaveMemoryKeepsTheSameMemoryForAnotherClient(t *testing.T) {
 	st, clientID := openMemoryStore(t)
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 
-	opencode, _, err := st.CreateClient(context.Background(), "opencode-writer", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	opencode, _, err := st.CreateClient(context.Background(), "opencode-writer", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}

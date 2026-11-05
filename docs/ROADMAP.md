@@ -10,7 +10,8 @@
 
 ### Входит в v1
 
-- Только **OpenCode** и **Jarvis**.
+- Любой агент с токеном; **OpenCode** и **Jarvis** — первые интеграции.
+- Клиент и его `source` — единица доступа; source уникален для активного клиента.
 - Go-сервер на Dokploy: REST, MCP, SQLite + FTS5, карточки, очередь.
 - Локальное приложение **SecondBrain.app** на SwiftUI, создаётся в **Xcode**.
 - Один `.app`-бинарник, без Docker и без фонового демона.
@@ -449,8 +450,9 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Подтвердить основной путь: MCP или HTTP.
-- [ ] Токен `jarvis` со scope `mcp:read`, `mcp:write`, `ingest`.
+- [x] Подтвердить основной путь: MCP основной, HTTP — fallback (ADR-11).
+- [ ] Токен `jarvis` со scope `mcp:read`, `mcp:write`, `ingest`; выпуск admin-токеном и передача в секрет Jarvis.
+- [x] Generic clients: source на клиенте, выпуск для любого агента (ADR-11).
 - [ ] MCP:
   - [ ] `remember`;
   - [ ] `search`;

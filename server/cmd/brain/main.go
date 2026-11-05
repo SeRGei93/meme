@@ -40,20 +40,25 @@ func run(args []string) error {
 	if len(args) > 0 {
 		command = args[0]
 	}
-	if len(args) > 1 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(args[1:], " "))
-	}
 
 	switch command {
 	case "serve":
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected arguments: %s", strings.Join(args[1:], " "))
+		}
 		return serve()
 	case "healthcheck":
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected arguments: %s", strings.Join(args[1:], " "))
+		}
 		return healthcheck()
+	case "client":
+		return clientCommand(args[1:])
 	case "help", "-h", "--help":
-		fmt.Fprintln(os.Stdout, "usage: brain [serve|healthcheck]")
+		fmt.Fprintln(os.Stdout, "usage: brain [serve|healthcheck|client create]")
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q (want serve or healthcheck)", command)
+		return fmt.Errorf("unknown command %q (want serve, healthcheck or client)", command)
 	}
 }
 

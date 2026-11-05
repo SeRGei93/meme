@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/graph"
 )
 
@@ -30,9 +31,10 @@ const (
 type GraphEdge = graph.Edge
 
 // GraphParams filters the memory graph. Zero values mean "not set": Limit
-// defaults to 100, ProjectKey matches every project and MinWeight is 0.
+// defaults to 100, ProjectKey/Source match everything and MinWeight is 0.
 type GraphParams struct {
 	ProjectKey string
+	Source     string
 	Limit      int
 	MinWeight  float64
 }
@@ -73,6 +75,10 @@ func (s *Store) Graph(ctx context.Context, params GraphParams) (Graph, error) {
 	if utf8.RuneCountInString(projectKey) > 500 {
 		return Graph{}, fmt.Errorf("%w: project_key must be at most 500 characters", ErrInvalidGraphQuery)
 	}
+	source := strings.TrimSpace(params.Source)
+	if utf8.RuneCountInString(source) > auth.MaxSourceQueryLen {
+		return Graph{}, fmt.Errorf("%w: source must be at most %d characters", ErrInvalidGraphQuery, auth.MaxSourceQueryLen)
+	}
 
 	// Fetch one extra row so truncation is detected without a COUNT.
 	rows, err := s.db.QueryContext(ctx, `
@@ -82,9 +88,10 @@ func (s *Store) Graph(ctx context.Context, params GraphParams) (Graph, error) {
 		FROM records r
 		LEFT JOIN projects p ON p.id = r.project_id
 		WHERE (? = '' OR p.key = ?)
+		  AND (? = '' OR r.source = ?)
 		ORDER BY r.updated_at DESC, r.id DESC
 		LIMIT ?`,
-		projectKey, projectKey, limit+1,
+		projectKey, projectKey, source, source, limit+1,
 	)
 	if err != nil {
 		return Graph{}, fmt.Errorf("list graph nodes: %w", err)

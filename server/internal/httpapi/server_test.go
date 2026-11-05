@@ -131,7 +131,7 @@ func TestHealthReturnsDatabaseState(t *testing.T) {
 	if body.Version != "test" {
 		t.Errorf("version = %q, want test", body.Version)
 	}
-	if body.SchemaVersion != 3 {
+	if body.SchemaVersion != 4 {
 		t.Errorf("schema_version = %d, want 3", body.SchemaVersion)
 	}
 	if body.Time.IsZero() {
@@ -282,8 +282,8 @@ func TestListClientsReturnsClientsWithoutTokens(t *testing.T) {
 	if got.ID != created.Client.ID || got.Name != created.Client.Name || got.Kind != created.Client.Kind {
 		t.Errorf("items[0] = %+v, want created client %+v", got, created.Client)
 	}
-	if got.Source == nil || *got.Source != "opencode" {
-		t.Errorf("items[0].source = %v, want opencode", got.Source)
+	if got.Source == nil || *got.Source != "opencode-macbook" {
+		t.Errorf("items[0].source = %v, want opencode-macbook", got.Source)
 	}
 	if strings.Contains(rec.Body.String(), created.Token) ||
 		strings.Contains(rec.Body.String(), "token_hash") ||
@@ -431,41 +431,48 @@ func TestBootstrapAdminCreatesFirstClient(t *testing.T) {
 	if body.Client.Name != "opencode-macbook" {
 		t.Errorf("client.name = %q, want opencode-macbook", body.Client.Name)
 	}
-	if body.Client.Kind != "opencode" {
-		t.Errorf("client.kind = %q, want opencode", body.Client.Kind)
+	if body.Client.Kind != "agent" {
+		t.Errorf("client.kind = %q, want agent", body.Client.Kind)
 	}
 	if len(body.Client.Scopes) != 1 || body.Client.Scopes[0] != "ingest" {
 		t.Errorf("client.scopes = %v, want [ingest]", body.Client.Scopes)
 	}
-	if body.Client.Source == nil || *body.Client.Source != "opencode" {
-		t.Errorf("client.source = %v, want opencode", body.Client.Source)
+	if body.Client.Source == nil || *body.Client.Source != "opencode-macbook" {
+		t.Errorf("client.source = %v, want opencode-macbook", body.Client.Source)
 	}
 	if body.Client.CreatedAt.IsZero() {
 		t.Error("client.created_at is zero")
 	}
-	if !regexp.MustCompile(`^sb_opencode_[A-Za-z0-9_-]{43}$`).MatchString(body.Token) {
-		t.Errorf("token = %q, want sb_opencode_<43 base64url chars>", body.Token)
+	if !regexp.MustCompile(`^sb_agent_[A-Za-z0-9_-]{43}$`).MatchString(body.Token) {
+		t.Errorf("token = %q, want sb_agent_<43 base64url chars>", body.Token)
 	}
 	if strings.Contains(rec.Body.String(), "token_hash") {
 		t.Error("response exposes token_hash")
 	}
 }
 
-func TestCreateClientDerivesSourceFromKindAndRejectsSourceField(t *testing.T) {
+func TestCreateClientAcceptsSourcesAndLegacyKinds(t *testing.T) {
 	env := newTestEnv(t)
 
 	tests := []struct {
+		name       string
 		kind       string
+		source     string
+		wantKind   string
 		wantSource string
 	}{
-		{"opencode", "opencode"},
-		{"jarvis", "jarvis"},
-		{"ui", ""},
-		{"admin", ""},
+		{"opencode-macbook", "opencode", "", "agent", "opencode-macbook"},
+		{"jarvis", "jarvis", "", "agent", "jarvis"},
+		{"claude", "agent", "claude-prod", "agent", "claude-prod"},
+		{"app", "ui", "", "ui", ""},
+		{"ops", "admin", "", "admin", ""},
 	}
 	for _, tt := range tests {
-		t.Run(tt.kind, func(t *testing.T) {
-			body := createClient(t, env, "source-"+tt.kind, tt.kind, []string{"ui"})
+		t.Run(tt.name, func(t *testing.T) {
+			body := createClientWithSource(t, env, tt.name, tt.kind, tt.source, []string{"ui"})
+			if body.Client.Kind != tt.wantKind {
+				t.Errorf("client.kind = %q, want %q", body.Client.Kind, tt.wantKind)
+			}
 			if tt.wantSource == "" {
 				if body.Client.Source != nil {
 					t.Errorf("client.source = %q, want null", *body.Client.Source)
@@ -479,17 +486,32 @@ func TestCreateClientDerivesSourceFromKindAndRejectsSourceField(t *testing.T) {
 	}
 
 	rec := env.do(t, http.MethodPost, "/api/v1/clients", testAdminToken, map[string]any{
-		"name": "spoofed-source", "kind": "ui", "scopes": []string{"ui"}, "source": "jarvis",
+		"name": "ui-with-source", "kind": "ui", "scopes": []string{"ui"}, "source": "jarvis",
 	})
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("source field: status = %d, want 422 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("source on ui: status = %d, want 422 (body %s)", rec.Code, rec.Body.String())
 	}
 	envelope := decodeError(t, rec)
 	if envelope.Error.Code != "validation_failed" {
-		t.Errorf("source field: code = %q, want validation_failed", envelope.Error.Code)
+		t.Errorf("source on ui: code = %q, want validation_failed", envelope.Error.Code)
 	}
 	if field := envelope.Error.Details["field"]; field != "source" {
-		t.Errorf("source field: details.field = %v, want source", field)
+		t.Errorf("source on ui: details.field = %v, want source", field)
+	}
+
+	createClientWithSource(t, env, "first-agent", "agent", "shared", []string{"mcp:read"})
+	rec = env.do(t, http.MethodPost, "/api/v1/clients", testAdminToken, map[string]any{
+		"name": "second-agent", "kind": "agent", "source": "shared", "scopes": []string{"mcp:read"},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate source: status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	envelope = decodeError(t, rec)
+	if envelope.Error.Code != "conflict" {
+		t.Errorf("duplicate source: code = %q, want conflict", envelope.Error.Code)
+	}
+	if field := envelope.Error.Details["field"]; field != "source" {
+		t.Errorf("duplicate source: details.field = %v, want source", field)
 	}
 }
 
@@ -611,6 +633,20 @@ func TestCreateClientValidation(t *testing.T) {
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "validation_failed",
 			wantField:  "kind",
+		},
+		{
+			name:       "source on ui",
+			body:       mustJSON(t, map[string]any{"name": "client", "kind": "ui", "source": "jarvis", "scopes": []string{"ui"}}),
+			wantStatus: http.StatusUnprocessableEntity,
+			wantCode:   "validation_failed",
+			wantField:  "source",
+		},
+		{
+			name:       "invalid source",
+			body:       mustJSON(t, map[string]any{"name": "client", "kind": "agent", "source": "Bad Source", "scopes": []string{"mcp:read"}}),
+			wantStatus: http.StatusUnprocessableEntity,
+			wantCode:   "validation_failed",
+			wantField:  "source",
 		},
 		{
 			name:       "missing scopes",
@@ -794,19 +830,28 @@ func TestRequestLogsAreStructuredAndDoNotContainSecrets(t *testing.T) {
 
 func createClient(t *testing.T, env *testEnv, name, kind string, scopes []string) createClientBody {
 	t.Helper()
-	rec := env.do(t, http.MethodPost, "/api/v1/clients", testAdminToken, map[string]any{
+	return createClientWithSource(t, env, name, kind, "", scopes)
+}
+
+func createClientWithSource(t *testing.T, env *testEnv, name, kind, source string, scopes []string) createClientBody {
+	t.Helper()
+	body := map[string]any{
 		"name":   name,
 		"kind":   kind,
 		"scopes": scopes,
-	})
+	}
+	if source != "" {
+		body["source"] = source
+	}
+	rec := env.do(t, http.MethodPost, "/api/v1/clients", testAdminToken, body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create client %q: status = %d, want 201 (body %s)", name, rec.Code, rec.Body.String())
 	}
-	var body createClientBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var created createClientBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode client %q: %v", name, err)
 	}
-	return body
+	return created
 }
 
 func createClientToken(t *testing.T, env *testEnv, name, kind string, scopes []string) string {

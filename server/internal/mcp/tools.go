@@ -27,7 +27,7 @@ var searchInfo = ToolInfo{
 			"query":   map[string]any{"type": "string", "minLength": 1, "maxLength": 500},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
 			"project": map[string]any{"type": "string", "minLength": 1, "maxLength": 500},
-			"source":  map[string]any{"type": "string", "enum": []any{"opencode", "jarvis"}},
+			"source":  map[string]any{"type": "string", "minLength": 1, "maxLength": 100},
 		},
 	},
 	OutputSchema: objectSchema,

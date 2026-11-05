@@ -25,6 +25,10 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrClientNameTaken is returned when an active client already uses the name.
 	ErrClientNameTaken = errors.New("client name already taken")
+	// ErrClientSourceTaken is returned when an active client already uses the source.
+	ErrClientSourceTaken = errors.New("client source already taken")
+	// ErrClientConflict is returned for an unexpected uniqueness conflict.
+	ErrClientConflict = errors.New("client conflicts with an active client")
 	// ErrInvalidClient is returned when client input violates the domain rules.
 	ErrInvalidClient = errors.New("invalid client")
 )
@@ -152,7 +156,34 @@ func (s *Store) configure(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context) (err error) {
+	// Rebuilding a table (for example clients, whose CHECK/unique indexes must
+	// change) drops the old table while child tables still reference its ids.
+	// Foreign keys are disabled for the migration run and verified back on
+	// afterwards; every migration preserves ids.
+	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys for migrations: %w", err)
+	}
+	defer func() {
+		restoreCtx := context.WithoutCancel(ctx)
+		if _, ferr := s.db.ExecContext(restoreCtx, "PRAGMA foreign_keys = ON"); ferr != nil {
+			if err == nil {
+				err = fmt.Errorf("re-enable foreign keys: %w", ferr)
+			}
+			return
+		}
+		var enabled int
+		if qerr := s.db.QueryRowContext(restoreCtx, "PRAGMA foreign_keys").Scan(&enabled); qerr != nil {
+			if err == nil {
+				err = fmt.Errorf("verify foreign keys after migrations: %w", qerr)
+			}
+			return
+		}
+		if enabled != 1 && err == nil {
+			err = errors.New("verify foreign keys after migrations: foreign key enforcement is off")
+		}
+	}()
+
 	if _, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    INTEGER PRIMARY KEY,
@@ -194,6 +225,12 @@ func (s *Store) migrate(ctx context.Context) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
+		if version == 4 {
+			if err := migrateGenericClients(ctx, tx); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("apply migration %s: %w", name, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
 			version, formatTime(time.Now()),
@@ -204,6 +241,20 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
+	}
+
+	// A rebuild must not leave dangling references. This runs before foreign
+	// keys are re-enabled in the deferred cleanup.
+	fkRows, err := s.db.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("check foreign keys after migrations: %w", err)
+	}
+	defer fkRows.Close()
+	if fkRows.Next() {
+		return errors.New("migrations left foreign key violations")
+	}
+	if err := fkRows.Err(); err != nil {
+		return fmt.Errorf("check foreign keys after migrations: %w", err)
 	}
 
 	return nil

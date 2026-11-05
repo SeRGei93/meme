@@ -21,7 +21,7 @@ func openJobStore(t *testing.T) (*Store, int64) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	client, _, err := st.CreateClient(context.Background(), "job-fixture", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(context.Background(), "job-fixture", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}

@@ -3,20 +3,20 @@ info:
   title: Second Brain API
   version: 1.0.0
   description: |
-    REST API v1 for Second Brain — the central memory for OpenCode and Jarvis.
+    REST API v1 for Second Brain — memory for any agent with a token.
 
     ## Authentication
 
     Every endpoint except `GET /health` requires an opaque bearer token:
 
     ```http
-    Authorization: Bearer sb_opencode_<random>
+    Authorization: Bearer sb_agent_<random>
     ```
 
     Tokens are issued by `POST /api/v1/clients` (admin scope) and are shown exactly
     once. The server stores only a SHA-256 hash. The token determines the client and
-    the `source` (`opencode` or `jarvis`); clients cannot set `source` in a request
-    body.
+    its `source` label; clients cannot set `source` in a request body. OpenCode and
+    Jarvis are ordinary clients, not special cases.
 
     ## Scopes
 
@@ -111,9 +111,9 @@ paths:
       tags: [ingest]
       summary: Ingest an OpenCode session bundle
       description: |
-        Accepts one normalized spool bundle. The server derives `source=opencode`
-        from the token. The request body is the bundle without `schema_version` and
-        `source`; both are rejected as unknown fields.
+        Accepts one normalized spool bundle. The server derives `source` from the
+        token. The request body is the bundle without `schema_version` and `source`;
+        both are rejected as unknown fields.
 
         The call is idempotent. Send `Idempotency-Key` (the macOS app uses the
         bundle's `bundle_id`) so retries can be replayed safely. When the header is
@@ -220,9 +220,8 @@ paths:
       tags: [ingest]
       summary: Store a structured memory
       description: |
-        Stores one fact, decision or note, typically from Jarvis. OpenCode may also
-        call it for the `/remember` command. The server derives `source` from the
-        token (`jarvis` or `opencode`); it is never a request field.
+        Stores one fact, decision or note. Any agent may call it. The server derives
+        `source` from the token; it is never a request field.
 
         If the request already contains a complete card (`title` and `summary`), the
         server does not call the LLM. Otherwise the server generates a card
@@ -368,7 +367,7 @@ paths:
                   value:
                     items:
                       - id: 42
-                        source: opencode
+                        source: opencode-macbook
                         kind: session
                         project_key: github.com/SeRGei93/meme
                         title: Fix SQLite migration ordering
@@ -493,6 +492,12 @@ paths:
             type: string
             minLength: 1
             maxLength: 500
+        - name: source
+          in: query
+          required: false
+          description: Restrict the graph to one client source label.
+          schema:
+            $ref: '#/components/schemas/Source'
         - name: limit
           in: query
           required: false
@@ -554,7 +559,7 @@ paths:
                       final: 120
                       draft: 8
                       by_source:
-                        opencode: 100
+                        opencode-macbook: 100
                         jarvis: 28
                       by_card_status:
                         heuristic: 0
@@ -617,9 +622,10 @@ paths:
       tags: [clients]
       summary: Create a client and issue a token
       description: |
-        Creates a client and returns its plaintext token exactly once. `source` is
-        not a request field: it is implied by `kind` (`opencode` → `opencode`,
-        `jarvis` → `jarvis`, `ui`/`admin` → no source). Names must be unique among
+        Creates a client and returns its plaintext token exactly once. An agent
+        client has a unique `source` (defaults to a slug of `name`); `ui` and
+        `admin` clients have no source. Legacy kinds `opencode` and `jarvis` are
+        accepted and stored as `agent`. Both name and source must be unique among
         non-revoked clients; a duplicate returns `409 conflict`.
       requestBody:
         required: true
@@ -628,15 +634,22 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateClientRequest'
             examples:
+              agent:
+                value:
+                  name: claude
+                  kind: agent
+                  source: claude-prod
+                  scopes: [mcp:read, mcp:write]
               opencode:
                 value:
                   name: opencode-macbook
                   kind: opencode
-                  scopes: [ingest]
+                  scopes: [ingest, mcp:read, mcp:write]
               jarvis:
                 value:
                   name: jarvis
-                  kind: jarvis
+                  kind: agent
+                  source: jarvis
                   scopes: [ingest, mcp:read, mcp:write]
               app:
                 value:
@@ -1082,8 +1095,17 @@ components:
               description: Present only when `status` is `error`.
     Source:
       type: string
-      description: Knowledge source. Always derived from the token; never from the request body.
-      enum: [opencode, jarvis]
+      minLength: 1
+      maxLength: 100
+      description: |
+        Source label of the client. Always derived from the token; never from a
+        request body. Search accepts any label, including legacy values.
+    SourceSlug:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-z0-9][a-z0-9._-]*$'
+      description: Lowercase source label chosen when a client is issued.
     MessageRole:
       type: string
       enum: [user, assistant, system, tool]
@@ -1514,15 +1536,10 @@ components:
           $ref: '#/components/schemas/CardStatusCounts'
     SourceCounts:
       type: object
-      additionalProperties: false
-      required: [opencode, jarvis]
-      properties:
-        opencode:
-          type: integer
-          minimum: 0
-        jarvis:
-          type: integer
-          minimum: 0
+      description: Record counts keyed by the source label of the owning client.
+      additionalProperties:
+        type: integer
+        minimum: 0
     CardStatusCounts:
       type: object
       additionalProperties: false
@@ -1592,7 +1609,17 @@ components:
               minimum: 0
     ClientKind:
       type: string
-      enum: [opencode, jarvis, ui, admin]
+      description: |
+        Capability preset. `agent` clients produce knowledge under their own
+        source; `ui` and `admin` clients do not. Legacy input values `opencode` and
+        `jarvis` are accepted and stored as `agent`.
+      enum: [agent, ui, admin]
+    ClientKindInput:
+      type: string
+      description: |
+        Same as `ClientKind`, plus the deprecated `opencode` and `jarvis` input
+        aliases. They are stored as `agent`; new clients should send `agent`.
+      enum: [agent, opencode, jarvis, ui, admin]
     Scope:
       type: string
       enum: [ingest, mcp:read, mcp:write, ui, admin]
@@ -1617,7 +1644,7 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Source'
             - type: 'null'
-          description: Derived from `kind`; null for ui/admin clients.
+          description: Unique source label of the client; null for ui/admin clients.
         created_at:
           type: string
           format: date-time
@@ -1647,7 +1674,14 @@ components:
           maxLength: 100
           pattern: '^[A-Za-z0-9._:-]+$'
         kind:
-          $ref: '#/components/schemas/ClientKind'
+          $ref: '#/components/schemas/ClientKindInput'
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/SourceSlug'
+            - type: 'null'
+          description: |
+            Source label for agent clients. Defaults to a slug of `name`; must be
+            omitted or null for ui/admin clients. Immutable after creation.
         scopes:
           type: array
           minItems: 1

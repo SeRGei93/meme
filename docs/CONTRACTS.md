@@ -57,10 +57,10 @@ Jarvis: токены, scope, ошибки, ретраи, идемпотентн�
 | `invalid_request` | 400 | нет | битый JSON, неверный query/path-параметр, пустое тело |
 | `validation_failed` | 422 | нет | JSON валиден, но нарушает схему или бизнес-правило |
 | `unauthorized` | 401 | нет | токен отсутствует, битый или отозван |
-| `forbidden` | 403 | нет | у токена нет нужного scope или kind не может выполнять операцию |
+| `forbidden` | 403 | нет | у токена нет нужного scope или у клиента нет source |
 | `not_found` | 404 | нет | запись, клиент или маршрут не найдены |
 | `method_not_allowed` | 405 | нет | метод не поддерживается для маршрута |
-| `conflict` | 409 | нет | дубликат имени клиента, `external_id` с другим содержимым |
+| `conflict` | 409 | нет | дубликат имени/source клиента, `external_id` с другим содержимым |
 | `idempotency_key_reused` | 409 | нет | тот же `Idempotency-Key`, но другое тело |
 | `payload_too_large` | 413 | нет | тело больше 10 MiB |
 | `unsupported_media_type` | 415 | нет | `Content-Type` не `application/json` |
@@ -82,7 +82,9 @@ Jarvis: токены, scope, ошибки, ретраи, идемпотентн�
 
 ### 4.1 Формат и хранение
 
-- Opaque bearer-токен: `sb_<kind>_<43 символа base64url>` (32 случайных байта).
+- Opaque bearer-токен: `sb_<kind>_<43 символа base64url>` (32 случайных байта), где
+  `kind` — `agent`, `ui` или `admin`. Старые токены `sb_opencode_…`/`sb_jarvis_…`
+  продолжают работать: они уже привязаны к клиенту по хешу.
 - Сервер хранит только SHA-256 хеш. Plaintext возвращается один раз в
   `POST /api/v1/clients` и больше нигде.
 - Bootstrap admin-токен задаётся `BRAIN_ADMIN_TOKEN` и не хранится в БД. Он обладает всеми
@@ -95,19 +97,38 @@ Jarvis: токены, scope, ошибки, ретраи, идемпотентн�
 - Утечка: отозвать клиента через `DELETE /api/v1/clients/{id}`, выпустить нового.
   Bootstrap-токен меняется редеплоем с новым `BRAIN_ADMIN_TOKEN`.
 
-### 4.2 Kind → source
+### 4.2 Клиенты и source
 
-`source` никогда не принимается из тела запроса. Он выводится из `kind` клиента:
+`source` — метка клиента, а не тип продукта. Она задаётся при выпуске токена,
+неизменяема и уникальна среди активных клиентов. Если `source` не передан, сервер
+берёт slug от `name` (`Claude Laptop` → `claude-laptop`). У revoked-клиента метка
+остаётся в истории и может быть выдана новому клиенту при ротации.
 
 | `kind` | `source` | `POST /ingest` | `POST /memories` | MCP |
 |---|---|---|---|---|
-| `opencode` | `opencode` | да | да (команда `/remember`) | да |
-| `jarvis` | `jarvis` | нет, `403` | да | да |
-| `ui` | `null` | нет | нет | нет |
-| `admin` | `null` | нет | нет | нет |
+| `agent` | обязателен, уникальный | да, если есть `ingest` | да, если есть `ingest` | да, по scope |
+| `ui` | `null` | нет, `403` | нет, `403` | нет, `403` |
+| `admin` | `null` | нет, `403` | нет, `403` | нет, `403` |
 
-Попытка передать `source` в теле `POST /ingest` или `POST /memories` — `422
-validation_failed`, потому что поле не входит в схему запроса.
+`kind` — пресет возможностей. Значения `opencode` и `jarvis` принимаются только на
+входе и сохраняются как `agent` с source по умолчанию. OpenCode, Jarvis, Claude,
+Cursor и любой другой агент — обычные клиенты; добавлять новый агент в код не нужно.
+
+- Source никогда не принимается из тела `POST /ingest`, `POST /memories` или MCP
+  `remember`: источник всегда берётся из клиента токена.
+- Выпуск токенов — только admin-токеном через `POST /api/v1/clients`. Открытой
+  регистрации и self-service обмена нет.
+- `GET /api/v1/search` и `stats.by_source` принимают/возвращают произвольные метки,
+  а не фиксированный список.
+
+Выпуск из CLI (ходит в admin API, не открывает SQLite):
+
+```bash
+BRAIN_ADMIN_TOKEN=... brain client create \
+  --url https://meme.aimerce.by \
+  --name claude --source claude-prod \
+  --scopes mcp:read,mcp:write
+```
 
 ### 4.3 Scope
 
@@ -133,17 +154,18 @@ Scope аддитивны. Для эндпоинта с несколькими sc
 | MCP `stats` | | ✓ | | | |
 | MCP `remember` | | | ✓ | | |
 
-Команда `/remember` пишет через HTTP `POST /api/v1/memories`, поэтому одному
-клиенту `opencode` нужны и MCP-scope, и `ingest`; onboarding выдаёт такой набор.
+Команда `/remember` пишет через HTTP `POST /api/v1/memories`, поэтому клиенту
+OpenCode нужны и MCP-scope, и `ingest`; onboarding выдаёт такой набор.
 
 Рекомендуемые наборы:
 
-| Клиент | Kind | Scope |
-|---|---|---|
-| macOS app (upload) | `opencode` | `ingest` |
-| macOS app (UI) | `ui` | `ui`, `admin` |
-| OpenCode plugin MCP + `/remember` | `opencode` | `ingest`, `mcp:read`, `mcp:write` |
-| Jarvis | `jarvis` | `ingest`, `mcp:read`, `mcp:write` |
+| Клиент | Kind | Source | Scope |
+|---|---|---|---|
+| macOS app (upload) | `agent` | slug имени (`opencode-<host>`) | `ingest` |
+| macOS app (UI) | `ui` | `null` | `ui`, `admin` |
+| OpenCode plugin MCP + `/remember` | `agent` | slug имени (`opencode-<host>`) | `ingest`, `mcp:read`, `mcp:write` |
+| Jarvis | `agent` | `jarvis` | `ingest`, `mcp:read`, `mcp:write` |
+| Любой внешний агент | `agent` | уникальная метка | по задаче |
 
 ## 5. Retry-политика
 
@@ -292,5 +314,5 @@ npm run validate:spool -- fixtures/spool-bundle.example.json
       их scope и формат ошибок.
 - [x] Зафиксированы коды ошибок, retry-политика и правила идемпотентности.
 - [x] Зафиксированы scope `ingest`, `mcp:read`, `mcp:write`, `ui`, `admin`; `source`
-      определяется токеном.
+      — уникальная метка клиента, определяется токеном.
 - [x] По контрактам можно поднять mock API и валидировать бандлы.

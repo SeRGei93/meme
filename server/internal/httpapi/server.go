@@ -288,20 +288,22 @@ func (s *server) writeUnauthorized(w http.ResponseWriter, r *http.Request) {
 	writeError(w, r, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token", nil)
 }
 
-// knowledgeSource centralizes the rule shared by POST /api/v1/memories and
-// /mcp: the token must belong to a client kind that can produce knowledge.
+// knowledgeSource centralizes the rule shared by POST /api/v1/ingest,
+// POST /api/v1/memories and /mcp: the token must belong to a client with a
+// knowledge source. The source always comes from the client record, never from
+// the request body.
 func (s *server) knowledgeSource(w http.ResponseWriter, r *http.Request, principal auth.Principal) (string, bool) {
 	if principal.Client == nil {
 		writeError(w, r, http.StatusForbidden, "forbidden",
 			"the bootstrap admin token cannot produce knowledge",
-			map[string]any{"required_kind": "opencode or jarvis"})
+			map[string]any{"required_kind": "agent"})
 		return "", false
 	}
-	source, ok := principal.Client.Source()
+	source, ok := principal.Client.KnowledgeSource()
 	if !ok {
 		writeError(w, r, http.StatusForbidden, "forbidden",
-			"client kind cannot produce a knowledge source",
-			map[string]any{"required_kind": "opencode or jarvis"})
+			"client has no knowledge source",
+			map[string]any{"required_kind": "agent"})
 		return "", false
 	}
 	return source, true

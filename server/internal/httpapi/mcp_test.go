@@ -333,7 +333,6 @@ func TestMCPProtocolAndArgumentErrors(t *testing.T) {
 		{"query": "x", "limit": nil},
 		{"query": "x", "project": ""},
 		{"query": "x", "project": nil},
-		{"query": "x", "source": "other"},
 		{"query": "x", "source": nil},
 	} {
 		rec := mcpDo(t, env, token, toolCallPayload(3, "search", args))
@@ -346,6 +345,11 @@ func TestMCPProtocolAndArgumentErrors(t *testing.T) {
 		if errorCode != "validation_failed" {
 			t.Errorf("search args %v error code = %v, want validation_failed", args, errorCode)
 		}
+	}
+
+	arbitrarySource := mcpDo(t, env, token, toolCallPayload(3, "search", map[string]any{"query": "x", "source": "claude"}))
+	if mcpResult(t, arbitrarySource)["isError"] == true {
+		t.Errorf("search with an arbitrary source failed: %q", arbitrarySource.Body.String())
 	}
 
 	tooLarge := make([]byte, (10<<20)+1)
