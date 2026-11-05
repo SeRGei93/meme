@@ -111,6 +111,9 @@ final class SearchModel {
     private var searchTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
     private var projectsTask: Task<Void, Never>?
+    private var projectsLoading = false
+    private var projectsLoaded = false
+    private var projectsGeneration = 0
     private let debounce: Duration
     private let now: () -> Date
     private let calendar: Calendar
@@ -163,6 +166,11 @@ final class SearchModel {
         guard self.client?.configuration != client?.configuration else { return }
         self.client = client
         guard client != nil else {
+            projectsTask?.cancel()
+            projectsTask = nil
+            projectsLoading = false
+            projectsLoaded = false
+            projectsGeneration &+= 1
             projects = []
             results = []
             total = 0
@@ -180,10 +188,22 @@ final class SearchModel {
         detailError = nil
         error = nil
         isLoading = false
+        projectsTask?.cancel()
+        projectsTask = nil
+        projectsLoading = false
+        projectsLoaded = false
+        projectsGeneration &+= 1
         loadProjects()
         if !isIdle {
             scheduleSearch(immediate: false)
         }
+    }
+
+    /// Ensures the project picker can resolve a display name after the search
+    /// view is recreated, without re-fetching on every appearance.
+    func ensureProjectsLoaded() {
+        guard !projectsLoaded, !projectsLoading else { return }
+        loadProjects()
     }
 
     /// Runs the current query immediately, bypassing the debounce. Used by
@@ -228,6 +248,7 @@ final class SearchModel {
         searchTask = nil
         detailTask = nil
         projectsTask = nil
+        projectsLoading = false
         isLoading = false
         detailLoading = false
     }
@@ -323,15 +344,24 @@ final class SearchModel {
     // MARK: - Projects and detail
 
     private func loadProjects() {
-        guard let client else { return }
+        guard let client, !projectsLoading else { return }
+        projectsLoading = true
+        projectsGeneration &+= 1
+        let generation = projectsGeneration
         projectsTask?.cancel()
         projectsTask = Task { [weak self] in
+            defer {
+                if self?.projectsGeneration == generation {
+                    self?.projectsLoading = false
+                }
+            }
             do {
                 let response = try await client.projects()
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self?.projectsGeneration == generation else { return }
                 self?.projects = response.items
+                self?.projectsLoaded = true
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self?.projectsGeneration == generation else { return }
                 self?.projects = []
             }
         }

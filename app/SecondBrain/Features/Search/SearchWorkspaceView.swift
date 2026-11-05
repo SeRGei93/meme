@@ -1,13 +1,9 @@
 import AppKit
 import SwiftUI
 
-extension Notification.Name {
-    static let focusMemorySearch = Notification.Name("com.serg.secondbrain.focus-memory-search")
-}
-
 struct SearchWorkspaceView: View {
     @Environment(AppState.self) private var appState
-    @State private var model = SearchModel()
+    let model: SearchModel
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -23,6 +19,10 @@ struct SearchWorkspaceView: View {
         }
         .onAppear {
             model.setClient(appState.makeReadClient())
+            model.ensureProjectsLoaded()
+            if appState.consumeSearchFocusRequest() {
+                searchFocused = true
+            }
         }
         .onChange(of: appState.serverURL) { _, _ in
             model.setClient(appState.makeReadClient())
@@ -33,8 +33,10 @@ struct SearchWorkspaceView: View {
         .onChange(of: appState.isConfigured) { _, _ in
             model.setClient(appState.makeReadClient())
         }
-        .onReceive(NotificationCenter.default.publisher(for: .focusMemorySearch)) { _ in
-            searchFocused = true
+        .onChange(of: appState.searchFocusRequest) { _, _ in
+            if appState.consumeSearchFocusRequest() {
+                searchFocused = true
+            }
         }
         .onDisappear {
             model.cancelPendingRequests()
@@ -110,10 +112,39 @@ struct SearchWorkspaceView: View {
             )
 
             filterBar
+            if let projectKey = model.projectKey {
+                projectBadge(projectKey)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 12)
+    }
+
+    private func projectBadge(_ projectKey: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text("Проект: \(model.selectedProject?.name ?? projectKey)")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityIdentifier("search.projectBadge")
+            Button {
+                model.projectKey = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("search.clearProject")
+            .accessibilityLabel("Сбросить фильтр по проекту")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.orange.opacity(0.10), in: Capsule())
     }
 
     private var filterBar: some View {
@@ -190,9 +221,11 @@ private struct SearchResultsPane: View {
         VStack(spacing: 0) {
             if model.isIdle {
                 SearchMessageView(
-                    systemImage: "magnifyingglass",
-                    title: "Найдите в памяти",
-                    message: "Введите запрос, чтобы найти решения, вопросы и заметки из OpenCode и Jarvis.",
+                    systemImage: model.projectKey == nil ? "magnifyingglass" : "folder",
+                    title: model.projectKey == nil ? "Найдите в памяти" : "Поиск по проекту",
+                    message: model.projectKey == nil
+                        ? "Введите запрос, чтобы найти решения, вопросы и заметки из OpenCode и Jarvis."
+                        : "Фильтр «\(model.selectedProject?.name ?? model.projectKey ?? "")» применён. Введите запрос, чтобы найти записи этого проекта.",
                     identifier: "search.idle"
                 )
             } else if let error = model.error {

@@ -81,6 +81,26 @@ struct APIClient: Sendable {
         try await send(path: "api/v1/stats")
     }
 
+    /// Admin-scoped ingestion queue. `failed` powers the dashboard error list;
+    /// an unfiltered page lets the agents screen find the latest job per source.
+    func jobs(
+        status: JobStatus? = nil,
+        limit: Int? = nil,
+        cursor: String? = nil
+    ) async throws -> JobList {
+        var items: [URLQueryItem] = []
+        if let status {
+            items.append(URLQueryItem(name: "status", value: status.rawValue))
+        }
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let cursor, !cursor.isEmpty {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await send(path: "api/v1/jobs", query: items)
+    }
+
     // MARK: - Ingest
 
     /// Uploads one spool bundle. `Idempotency-Key` is always the bundle id, so a

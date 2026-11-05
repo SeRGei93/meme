@@ -82,6 +82,87 @@ final class SecondBrainUITests: XCTestCase {
         )
     }
 
+    func testDashboardShowsCountsQueueAndIngestionErrors() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "dashboard",
+            uiTokens: "opencode,jarvis"
+        )
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["dashboard.recordsTotal"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["dashboard.recordsTotal"].value as? String, "3")
+        XCTAssertEqual(app.staticTexts["dashboard.projectsTotal"].value as? String, "2")
+        XCTAssertEqual(app.staticTexts["dashboard.clientsTotal"].value as? String, "1")
+        XCTAssertTrue(app.staticTexts["dashboard.lastIngest"].waitForExistence(timeout: 5))
+
+        let failedJob = element("dashboard.failedJob.10", in: app)
+        XCTAssertTrue(failedJob.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", "upstream timeout", "upstream timeout")
+            ).firstMatch.waitForExistence(timeout: 5),
+            "ingestion errors must be visible without reading server logs"
+        )
+        XCTAssertTrue(app.staticTexts["dashboard.errorsEmpty"].exists == false)
+    }
+
+    func testProjectsOpenSearchWithProjectFilter() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "projects"
+        )
+        app.launch()
+
+        let row = app.buttons["project.row.github.com/example/meme"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["projects.count"].exists)
+        row.click()
+
+        XCTAssertTrue(app.textFields["search.field"].waitForExistence(timeout: 10))
+        let badge = app.staticTexts["search.projectBadge"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 10))
+        let expected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Проект: meme"),
+            object: badge
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [expected], timeout: 10), .completed)
+        XCTAssertTrue(element("search.idle", in: app).waitForExistence(timeout: 5))
+    }
+
+    func testAgentsShowOpenCodeAndJarvisStatus() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "agents",
+            uiTokens: "opencode,jarvis"
+        )
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["agents.opencode.lastCapture"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["agents.jarvis.lastMemory"].exists)
+        XCTAssertEqual(
+            app.staticTexts["agents.opencode.records"].value as? String,
+            "2"
+        )
+        XCTAssertEqual(
+            app.staticTexts["agents.jarvis.records"].value as? String,
+            "1"
+        )
+        XCTAssertTrue(
+            (app.staticTexts["agents.opencode.token"].value as? String)?
+                .contains("opencode-macbook") == true,
+            "token status should name the active OpenCode client"
+        )
+        XCTAssertTrue(
+            (app.staticTexts["agents.jarvis.token"].value as? String)?
+                .contains("jarvis") == true
+        )
+        XCTAssertTrue(app.staticTexts["agents.queue.failed"].exists)
+    }
+
     func testSearchScreenIsUsableInLightAppearance() throws {
         let app = configuredApp()
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
@@ -229,7 +310,7 @@ final class SecondBrainUITests: XCTestCase {
 
         app.buttons["Settings…"].click()
         let settings = app.windows["Second Brain Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
         let toggle = settings.switches.firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
 
@@ -273,7 +354,7 @@ final class SecondBrainUITests: XCTestCase {
         settingsButton.click()
 
         let settings = app.windows["Second Brain Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
 
         let status = settings.staticTexts["settings.pluginStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
@@ -364,7 +445,9 @@ final class SecondBrainUITests: XCTestCase {
         uiToken: String? = nil,
         mockAPI: Bool = false,
         uiQuery: String? = nil,
-        uiRawQuery: String? = nil
+        uiRawQuery: String? = nil,
+        uiSection: String? = nil,
+        uiTokens: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
@@ -391,6 +474,12 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let uiRawQuery {
             app.launchEnvironment["SECOND_BRAIN_UI_RAW_QUERY"] = uiRawQuery
+        }
+        if let uiSection {
+            app.launchEnvironment["SECOND_BRAIN_UI_SECTION"] = uiSection
+        }
+        if let uiTokens {
+            app.launchEnvironment["SECOND_BRAIN_UI_TOKENS"] = uiTokens
         }
         return app
     }

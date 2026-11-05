@@ -16,7 +16,7 @@ struct SecondBrainApp: App {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Поиск") {
                 Button("Найти…") {
-                    NotificationCenter.default.post(name: .focusMemorySearch, object: nil)
+                    appState.focusSearch()
                 }
                 .keyboardShortcut("k", modifiers: .command)
             }

@@ -11,6 +11,7 @@ struct AppSidebarView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 16) {
                     brand
+                    navigation
                     status
                     if appState.isConfigured {
                         UploadQueueSidebarView()
@@ -56,6 +57,39 @@ struct AppSidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+
+    private var navigation: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(AppSection.allCases) { section in
+                let isSelected = appState.selectedSection == section
+                Button {
+                    appState.selectedSection = section
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: section.systemImage)
+                            .frame(width: 16)
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                            .accessibilityHidden(true)
+                        Text(section.title)
+                            .font(.callout.weight(isSelected ? .semibold : .regular))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        isSelected ? Color.accentColor.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("nav.\(section.rawValue)")
+                .accessibilityLabel(section.title)
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            }
+        }
     }
 
     private var status: some View {

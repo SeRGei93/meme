@@ -388,11 +388,11 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 
 ### Задачи
 
-- [ ] Dashboard:
-  - [ ] количество записей/проектов/клиентов;
-  - [ ] очередь;
-  - [ ] последняя активность;
-  - [ ] ошибки ingestion.
+- [x] Dashboard:
+  - [x] количество записей/проектов/клиентов;
+  - [x] очередь;
+  - [x] последняя активность;
+  - [x] ошибки ingestion.
 - [x] Search:
   - [x] поле запроса;
   - [x] debounce;
@@ -405,14 +405,14 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] project/source/date;
   - [x] raw_text с поиском;
   - [x] copy.
-- [ ] Projects:
-  - [ ] список;
-  - [ ] количество записей;
-  - [ ] переход к поиску по проекту.
-- [ ] Agents:
-  - [ ] OpenCode: last capture, plugin status;
-  - [ ] Jarvis: last memory, token status;
-  - [ ] очередь.
+- [x] Projects:
+  - [x] список;
+  - [x] количество записей;
+  - [x] переход к поиску по проекту.
+- [x] Agents:
+  - [x] OpenCode: last capture, plugin status;
+  - [x] Jarvis: last memory, token status;
+  - [x] очередь.
 - [ ] Graph:
   - [ ] Canvas + force-directed layout;
   - [ ] узлы/связи;
