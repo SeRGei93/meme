@@ -11,9 +11,15 @@ struct SecondBrainApp: App {
             ContentView()
                 .environment(appState)
         }
-        .defaultSize(width: 920, height: 620)
+        .defaultSize(width: 1180, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandMenu("Поиск") {
+                Button("Найти…") {
+                    NotificationCenter.default.post(name: .focusMemorySearch, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
+            }
         }
 
         MenuBarExtra {

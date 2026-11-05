@@ -40,6 +40,9 @@ final class AppState {
     var settingsNotice: String?
     var settingsError: String?
     var integrationBusy = false
+    /// Bumped whenever token/keychain presence is re-read, so read-only screens
+    /// can rebuild their API client after rotation.
+    private(set) var tokenRevision = 0
 
     // MARK: Upload queue
 
@@ -60,7 +63,7 @@ final class AppState {
     init(
         configStore: ConfigStore = ConfigStore(),
         keychain: KeychainStore = KeychainStore(),
-        session: URLSession = .shared,
+        session: URLSession = AppState.defaultSession(),
         openCodeDirectory: URL = OpenCodePaths.defaultDirectory(),
         pluginSourceDirectory: URL? = PluginInstaller.defaultSourceDirectory(),
         uploadsEnabled: Bool = ProcessInfo.processInfo.environment["SECOND_BRAIN_DISABLE_UPLOADS"] != "1"
@@ -75,6 +78,15 @@ final class AppState {
             sourceDirectory: pluginSourceDirectory
         )
         self.uploadsEnabled = uploadsEnabled
+    }
+
+    nonisolated private static func defaultSession() -> URLSession {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["SECOND_BRAIN_UI_MOCK"] == "1" {
+            return UITestURLProtocol.session()
+        }
+        #endif
+        return .shared
     }
 
 
@@ -101,7 +113,7 @@ final class AppState {
         #endif
 
         guard let url = stored?.serverURL,
-              let token = try? keychain.value(for: KeychainStore.Account.ui) else {
+              let token = readToken(for: KeychainStore.Account.ui) else {
             isConfigured = false
             isOnboardingPresented = true
             statusText = "Требуется настройка"
@@ -234,6 +246,7 @@ final class AppState {
             presence[account] = (try? keychain.value(for: account)) != nil
         }
         tokenPresence = presence
+        tokenRevision &+= 1
     }
 
     /// Installs (or reinstalls) the plugin and rewrites the MCP entry. A failure
@@ -399,13 +412,36 @@ final class AppState {
     }
 
     private func makeUploadClient() -> APIClient? {
+        makeClient(for: KeychainStore.Account.opencode)
+    }
+
+    /// Read-only client for search and record detail. Uses the `ui` token so a
+    /// revoked OpenCode token does not break browsing the memory.
+    func makeReadClient() -> APIClient? {
+        makeClient(for: KeychainStore.Account.ui)
+    }
+
+    private func makeClient(for account: String) -> APIClient? {
         guard let config = try? configStore.load(),
               let url = config.serverURL,
-              let token = try? keychain.value(for: KeychainStore.Account.opencode),
+              let token = readToken(for: account),
               !token.isEmpty else {
             return nil
         }
         return APIClient(baseURL: url, token: token, session: session)
+    }
+
+    private func readToken(for account: String) -> String? {
+        #if DEBUG
+        // UI tests and previews point the app at a local mock server without
+        // touching the real login keychain.
+        if account == KeychainStore.Account.ui,
+           let override = ProcessInfo.processInfo.environment["SECOND_BRAIN_UI_TOKEN"],
+           !override.isEmpty {
+            return override
+        }
+        #endif
+        return try? keychain.value(for: account)
     }
 
     private func applyUploadStatus(_ status: UploadStatus, from queue: UploadQueue) {

@@ -393,18 +393,18 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] очередь;
   - [ ] последняя активность;
   - [ ] ошибки ingestion.
-- [ ] Search:
-  - [ ] поле запроса;
-  - [ ] debounce;
-  - [ ] фильтры project/source/date;
-  - [ ] результаты-карточки;
-  - [ ] клавиатурная навигация;
-  - [ ] `⌘K`.
-- [ ] Record detail:
-  - [ ] title/summary/questions/keywords/atoms;
-  - [ ] project/source/date;
-  - [ ] raw_text с поиском;
-  - [ ] copy.
+- [x] Search:
+  - [x] поле запроса;
+  - [x] debounce;
+  - [x] фильтры project/source/date;
+  - [x] результаты-карточки;
+  - [x] клавиатурная навигация;
+  - [x] `⌘K`.
+- [x] Record detail:
+  - [x] title/summary/questions/keywords/atoms;
+  - [x] project/source/date;
+  - [x] raw_text с поиском;
+  - [x] copy.
 - [ ] Projects:
   - [ ] список;
   - [ ] количество записей;
@@ -428,10 +428,10 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [ ] статус;
   - [ ] быстрый поиск;
   - [ ] открыть dashboard.
-- [ ] Состояния:
-  - [ ] loading/empty/error;
-  - [ ] тёмная/светлая тема;
-  - [ ] accessibility labels.
+- [x] Состояния:
+  - [x] loading/empty/error;
+  - [x] тёмная/светлая тема;
+  - [x] accessibility labels.
 
 ### Acceptance criteria
 

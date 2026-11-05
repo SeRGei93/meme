@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 
@@ -79,6 +80,125 @@ final class SecondBrainUITests: XCTestCase {
                 atPath: spool.appendingPathComponent("failed/broken.json").path
             )
         )
+    }
+
+    func testSearchScreenIsUsableInLightAppearance() throws {
+        let app = configuredApp()
+        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launch()
+
+        XCTAssertTrue(app.textFields["search.field"].waitForExistence(timeout: 10))
+        XCTAssertTrue(element("search.idle", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(element("search.projectFilter", in: app).exists)
+        XCTAssertTrue(element("search.sourceFilter", in: app).exists)
+        XCTAssertTrue(element("search.dateFilter", in: app).exists)
+    }
+
+    func testSearchDetailRawTextCopyAndSelection() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-search-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        let config: [String: Any] = ["server_url": "https://ui.test"]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = configuredApp(
+            configDirectory: configDirectory,
+            uploadsEnabled: false,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiQuery: "sqlite",
+            uiRawQuery: "numeric prefix"
+        )
+        app.launch()
+
+        let search = app.textFields["search.field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        XCTAssertEqual(search.value as? String, "sqlite")
+
+        let title = app.staticTexts["record.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.value as? String, "SQLite migration ordering")
+        XCTAssertEqual(
+            app.staticTexts["record.summary"].value as? String,
+            "Migrations were sorted lexicographically."
+        )
+        XCTAssertTrue(app.staticTexts["record.date"].exists)
+        XCTAssertTrue(app.staticTexts["Why did migration 004 run first?"].exists)
+        XCTAssertTrue(app.staticTexts["sqlite"].exists)
+        XCTAssertTrue(app.staticTexts["Sort migrations by their numeric prefix."].exists)
+        XCTAssertTrue(app.staticTexts["github.com/example/meme"].exists)
+
+        let matches = app.staticTexts["record.rawMatches"]
+        XCTAssertTrue(matches.waitForExistence(timeout: 5))
+        XCTAssertEqual(matches.value as? String, "1 совпадение")
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", "numeric prefix", "numeric prefix")
+            ).firstMatch.waitForExistence(timeout: 5),
+            "the raw-text view must show the matching lines"
+        )
+
+        NSPasteboard.general.clearContents()
+        app.buttons["record.copyRaw"].click()
+        let copiedRaw = NSPasteboard.general.string(forType: .string)
+        XCTAssertTrue(copiedRaw?.contains("Migrations now sort by numeric prefix.") == true)
+        XCTAssertTrue(
+            copiedRaw?.contains("Use the migration test.") == true,
+            "copy must include the full raw text, not only the filtered view"
+        )
+
+        search.click()
+        app.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "value == %@", "Jarvis SQLite notes")
+            ).firstMatch.waitForExistence(timeout: 10),
+            "selecting a result must load its detail"
+        )
+
+        let sourceFilter = element("search.sourceFilter", in: app)
+        XCTAssertTrue(sourceFilter.exists)
+        sourceFilter.click()
+        let jarvis = app.descendants(matching: .menuItem)
+            .matching(NSPredicate(format: "title == %@", "Jarvis"))
+            .firstMatch
+        XCTAssertTrue(jarvis.waitForExistence(timeout: 5))
+        jarvis.click()
+        let count = app.staticTexts["search.count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 10))
+        XCTAssertEqual(count.value as? String, "Найдено: 1")
+
+        let clear = app.buttons["search.clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.click()
+        XCTAssertTrue(element("search.idle", in: app).waitForExistence(timeout: 10))
+    }
+
+    func testSearchShowsServerErrorAndRetry() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-search-error-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        let config: [String: Any] = ["server_url": "https://ui.test"]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = configuredApp(
+            configDirectory: configDirectory,
+            uploadsEnabled: false,
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiQuery: "fail"
+        )
+        app.launch()
+
+        XCTAssertTrue(app.textFields["search.field"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["search.error"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["search.retry"].exists)
     }
 
     func testSettingsOpens() throws {
@@ -232,11 +352,19 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.buttons["onboarding.connect"].exists)
     }
 
+    private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)[identifier].firstMatch
+    }
+
     private func configuredApp(
         openCodeDirectory: URL? = nil,
         pluginSource: URL? = nil,
         configDirectory: URL? = nil,
-        uploadsEnabled: Bool = false
+        uploadsEnabled: Bool = false,
+        uiToken: String? = nil,
+        mockAPI: Bool = false,
+        uiQuery: String? = nil,
+        uiRawQuery: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
@@ -251,6 +379,18 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let configDirectory {
             app.launchEnvironment["SECOND_BRAIN_CONFIG_DIR"] = configDirectory.path
+        }
+        if let uiToken {
+            app.launchEnvironment["SECOND_BRAIN_UI_TOKEN"] = uiToken
+        }
+        if mockAPI {
+            app.launchEnvironment["SECOND_BRAIN_UI_MOCK"] = "1"
+        }
+        if let uiQuery {
+            app.launchEnvironment["SECOND_BRAIN_UI_QUERY"] = uiQuery
+        }
+        if let uiRawQuery {
+            app.launchEnvironment["SECOND_BRAIN_UI_RAW_QUERY"] = uiRawQuery
         }
         return app
     }

@@ -42,13 +42,29 @@ struct APIClient: Sendable {
         throw Self.mapError(status: http.statusCode, headers: http.allHeaderFields, body: data)
     }
 
-    func search(query: String, limit: Int? = nil, projectKey: String? = nil) async throws -> SearchResponse {
+    func search(
+        query: String,
+        limit: Int? = nil,
+        projectKey: String? = nil,
+        source: String? = nil,
+        since: Date? = nil,
+        until: Date? = nil
+    ) async throws -> SearchResponse {
         var items = [URLQueryItem(name: "q", value: query)]
         if let limit {
             items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
-        if let projectKey {
+        if let projectKey, !projectKey.isEmpty {
             items.append(URLQueryItem(name: "project_key", value: projectKey))
+        }
+        if let source, !source.isEmpty {
+            items.append(URLQueryItem(name: "source", value: source))
+        }
+        if let since {
+            items.append(URLQueryItem(name: "since", value: APIDate.string(from: since)))
+        }
+        if let until {
+            items.append(URLQueryItem(name: "until", value: APIDate.string(from: until)))
         }
         return try await send(path: "api/v1/search", query: items)
     }
@@ -291,5 +307,9 @@ enum APIDate {
         guard !digits.isEmpty else { return nil }
         let rebuilt = String(string[..<dot]) + "." + String(digits) + String(suffix[zoneIndex...])
         return fractional.date(from: rebuilt)
+    }
+
+    static func string(from date: Date) -> String {
+        fractional.string(from: date)
     }
 }

@@ -26,7 +26,7 @@ struct Health: Codable, Equatable, Sendable {
 
 // MARK: - Cards and records
 
-struct Card: Codable, Equatable, Sendable {
+struct Card: Codable, Equatable, Sendable, Identifiable {
     let id: Int64
     let source: String
     let kind: String
