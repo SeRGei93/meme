@@ -54,6 +54,7 @@ final class AppState {
     private let uploadsEnabled: Bool
     private var uploadQueue: UploadQueue?
     private var spoolWatcher: SpoolWatcher?
+    private var uploadSetupError: String?
     private var didBootstrap = false
 
     init(
@@ -339,19 +340,6 @@ final class AppState {
 
     // MARK: - Uploads
 
-    var uploadSummary: String {
-        if uploadStatus.requiresAuthentication {
-            return "Загрузка остановлена: нужен новый токен"
-        }
-        var summary = "Очередь: \(uploadStatus.pending) · отправлено: \(uploadStatus.sent) · failed: \(uploadStatus.failed)"
-        if uploadStatus.isUploading {
-            summary += " · отправка…"
-        } else if let next = uploadStatus.nextRetryAt {
-            summary += " · повтор \(next.formatted(date: .omitted, time: .standard))"
-        }
-        return summary
-    }
-
     func retryUploadsNow() {
         Task { await uploadQueue?.retryNow() }
     }
@@ -363,6 +351,7 @@ final class AppState {
     private func startUploads() {
         guard uploadsEnabled, isConfigured else { return }
         stopUploads()
+        uploadSetupError = nil
 
         let directory = URL(fileURLWithPath: spoolPathText, isDirectory: true)
         let queue = UploadQueue(spoolDirectory: directory, client: makeUploadClient())
@@ -375,8 +364,10 @@ final class AppState {
         do {
             try watcher.start()
         } catch {
-            uploadStatus.lastError = (error as? LocalizedError)?.errorDescription
+            let message = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
+            uploadSetupError = message
+            uploadStatus.lastError = message
         }
 
         Task {
@@ -396,6 +387,7 @@ final class AppState {
             Task { await queue.shutdown() }
         }
         uploadQueue = nil
+        uploadSetupError = nil
     }
 
     private func restartUploads() {
@@ -418,7 +410,13 @@ final class AppState {
 
     private func applyUploadStatus(_ status: UploadStatus, from queue: UploadQueue) {
         guard uploadQueue === queue else { return }
-        uploadStatus = status
+        var merged = status
+        if let uploadSetupError {
+            // The queue publishes its clean initial state right after setup; a
+            // watcher failure must survive that publish.
+            merged.lastError = uploadSetupError
+        }
+        uploadStatus = merged
         if status.requiresAuthentication {
             requiresReauthentication = true
             connection = .unauthenticated

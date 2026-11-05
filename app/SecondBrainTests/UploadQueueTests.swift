@@ -302,6 +302,113 @@ final class UploadQueueTests: XCTestCase {
         )
     }
 
+    func testInvalidBundleIsQuarantinedEvenWithoutAToken() async throws {
+        try SpoolFixtures.write(Data("{not json".utf8), to: spool, name: "broken.json")
+        let queue = UploadQueue(
+            spoolDirectory: spool,
+            client: nil,
+            retryPolicy: .init(base: 3_600, cap: 3_600, maxAttempts: 5),
+            jitter: { 1 }
+        )
+
+        await queue.trigger()
+
+        let status = await queue.status
+        XCTAssertEqual(status.failed, 1)
+        XCTAssertEqual(status.pending, 0)
+        XCTAssertFalse(status.missingToken, "validation does not need the network")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testMissingTokenKeepsAValidBundleAndFlagsIt() async throws {
+        let file = try SpoolFixtures.write(SpoolFixtures.bundleData(), to: spool)
+        let queue = UploadQueue(
+            spoolDirectory: spool,
+            client: nil,
+            retryPolicy: .init(base: 3_600, cap: 3_600, maxAttempts: 5),
+            jitter: { 1 }
+        )
+
+        await queue.trigger()
+
+        let status = await queue.status
+        XCTAssertTrue(status.missingToken)
+        XCTAssertEqual(status.pending, 1)
+        XCTAssertNotNil(status.lastError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testSuccessfulUploadDoesNotHideAnExistingFailedError() async throws {
+        try SpoolFixtures.write(Data("{not json".utf8), to: spool, name: "broken.json")
+        try SpoolFixtures.write(
+            SpoolFixtures.bundleData(externalID: "ses_good"),
+            to: spool,
+            name: "good.json"
+        )
+        StubURLProtocol.setHandler { _ in
+            .init(status: 202, body: Self.ingestResponse())
+        }
+        let queue = makeQueue()
+
+        await queue.trigger()
+
+        let status = await queue.status
+        XCTAssertEqual(status.failed, 1)
+        XCTAssertEqual(status.sent, 1)
+        XCTAssertEqual(status.pending, 0)
+        XCTAssertNotNil(status.lastError, "failed files still need an explanation in the UI")
+    }
+
+    func testCleanPassClearsATransientError() async throws {
+        let file = try SpoolFixtures.write(SpoolFixtures.bundleData(), to: spool)
+        StubURLProtocol.setHandler { _ in
+            .init(status: 503, body: Data(#"{"error":{"code":"unavailable","message":"down"}}"#.utf8))
+        }
+        let queue = makeQueue()
+        await queue.trigger()
+        var status = await queue.status
+        XCTAssertNotNil(status.lastError)
+        XCTAssertNotNil(status.nextRetryAt)
+
+        try FileManager.default.removeItem(at: file)
+        await queue.trigger()
+
+        status = await queue.status
+        XCTAssertNil(status.lastError)
+        XCTAssertNil(status.nextRetryAt)
+        XCTAssertEqual(status.pending, 0)
+    }
+
+    func testStatusHandlerSeesProgressDuringAMultiSessionPass() async throws {
+        try SpoolFixtures.write(
+            SpoolFixtures.bundleData(externalID: "ses_a"),
+            to: spool,
+            name: "a.json"
+        )
+        try SpoolFixtures.write(
+            SpoolFixtures.bundleData(externalID: "ses_b"),
+            to: spool,
+            name: "b.json"
+        )
+        StubURLProtocol.setHandler { _ in
+            .init(status: 202, body: Self.ingestResponse())
+        }
+        let collector = StatusCollector()
+        let queue = makeQueue()
+        await queue.setStatusHandler { collector.append($0) }
+
+        await queue.trigger()
+
+        let snapshots = collector.values
+        XCTAssertTrue(
+            snapshots.contains { $0.sent == 1 && $0.pending == 1 },
+            "the first delivered session must be visible before the pass ends"
+        )
+        XCTAssertEqual(snapshots.last?.sent, 2)
+        XCTAssertEqual(snapshots.last?.pending, 0)
+    }
+
     func testClearFailedRemovesStoredFailures() async throws {
         try SpoolFixtures.write(Data("{}".utf8), to: spool, name: "broken.json")
         let queue = makeQueue()
@@ -370,5 +477,23 @@ private final class LockedBox<Value>: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return body(&stored)
+    }
+}
+
+/// Collects status snapshots published by `UploadQueue`.
+private final class StatusCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [UploadStatus] = []
+
+    var values: [UploadStatus] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
+    func append(_ status: UploadStatus) {
+        lock.lock()
+        stored.append(status)
+        lock.unlock()
     }
 }

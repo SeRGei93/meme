@@ -1,16 +1,5 @@
 import Foundation
 
-struct UploadStatus: Equatable, Sendable {
-    var pending = 0
-    var failed = 0
-    var sent = 0
-    var isUploading = false
-    var lastError: String?
-    var lastSuccessAt: Date?
-    var nextRetryAt: Date?
-    var requiresAuthentication = false
-}
-
 struct UploadRetryPolicy: Equatable, Sendable {
     let base: TimeInterval
     let cap: TimeInterval
@@ -90,6 +79,7 @@ actor UploadQueue {
         attempts = [:]
         if client != nil {
             status.requiresAuthentication = false
+            status.missingToken = false
             status.lastError = nil
             await trigger()
         } else {
@@ -138,11 +128,6 @@ actor UploadQueue {
     }
 
     private func performPass() async {
-        guard let client else {
-            status.lastError = "Нет токена OpenCode. Запустите onboarding"
-            refreshCounts()
-            return
-        }
         status.isUploading = true
         refreshCounts()
         publish()
@@ -154,7 +139,14 @@ actor UploadQueue {
             status.lastError = "Не удалось прочитать spool: \(error.localizedDescription)"
             return
         }
-        guard !files.isEmpty else { return }
+        guard !files.isEmpty else {
+            // A clean pass clears a transient error, but never hides a
+            // permanent failure that still has files in `failed/`.
+            if status.failed == 0 {
+                status.lastError = nil
+            }
+            return
+        }
 
         var valid: [(url: URL, bundle: SpoolBundle)] = []
         for url in files {
@@ -165,7 +157,21 @@ actor UploadQueue {
             }
         }
         refreshCounts()
-        if valid.isEmpty { return }
+        if valid.isEmpty {
+            // Nothing needs the network, so a stale "no token" flag must not
+            // hide the real per-file errors in the badge.
+            status.missingToken = false
+            return
+        }
+
+        // Validation is local, so an invalid bundle is quarantined even when
+        // there is no token. Only a valid bundle needs the network.
+        guard let client else {
+            status.missingToken = true
+            status.lastError = "Нет токена OpenCode. Запустите onboarding"
+            return
+        }
+        status.missingToken = false
 
         let groups = Dictionary(grouping: valid) { $0.bundle.externalID }
         for group in groups.values.sorted(by: { lhs, rhs in
@@ -181,11 +187,17 @@ actor UploadQueue {
             for item in candidates {
                 do {
                     _ = try await client.ingest(item.bundle)
-                    delete(candidates.map(\.url))
+                    let removed = delete(candidates.map(\.url))
                     attempts[item.bundle.bundleID] = nil
                     status.sent += 1
                     status.lastSuccessAt = now()
-                    status.lastError = nil
+                    status.pending = max(0, status.pending - removed)
+                    if status.failed == 0 {
+                        status.lastError = nil
+                    }
+                    // A large spool may take a while; show progress per session
+                    // without rescanning the whole directory for every bundle.
+                    publish()
                     break
                 } catch let error as APIError {
                     if error.requiresReauthentication {
@@ -206,6 +218,8 @@ actor UploadQueue {
                     for older in candidates where older.url != item.url {
                         moveToFailed(older.url, error: error)
                     }
+                    refreshCounts()
+                    publish()
                     break
                 } catch {
                     registerRetry(for: item.bundle, error: nil)
@@ -298,11 +312,14 @@ actor UploadQueue {
             ?? error.localizedDescription
     }
 
-    private func delete(_ urls: [URL]) {
+    @discardableResult
+    private func delete(_ urls: [URL]) -> Int {
+        var removed = 0
         var firstError: String?
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             do {
                 try FileManager.default.removeItem(at: url)
+                removed += 1
             } catch {
                 firstError = firstError ?? error.localizedDescription
             }
@@ -310,10 +327,18 @@ actor UploadQueue {
         if let firstError {
             status.lastError = "Не удалось удалить отправленный бандл: \(firstError)"
         }
+        return removed
     }
 
     private func refreshCounts() {
-        status.pending = (try? SpoolWatcher.bundleFiles(in: spoolDirectory).count) ?? 0
+        do {
+            status.pending = try SpoolWatcher.bundleFiles(in: spoolDirectory).count
+        } catch {
+            status.pending = 0
+            status.lastError = "Не удалось прочитать spool: \(error.localizedDescription)"
+        }
+        // The failed directory is created lazily, so a missing directory is a
+        // normal empty state rather than an error.
         status.failed = (try? SpoolWatcher.bundleFiles(in: failedDirectory).count) ?? 0
     }
 

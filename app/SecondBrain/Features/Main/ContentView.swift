@@ -34,40 +34,8 @@ struct ContentView: View {
                 .accessibilityIdentifier("main.integrationSummary")
 
             if appState.isConfigured {
-                VStack(spacing: 4) {
-                    Text(appState.uploadSummary)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("main.uploadSummary")
-                    if let uploadError = appState.uploadStatus.lastError {
-                        Text(uploadError)
-                            .font(.caption2)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                            .accessibilityIdentifier("main.uploadError")
-                    }
-                    HStack(spacing: 10) {
-                        Button("Отправить сейчас") {
-                            appState.retryUploadsNow()
-                        }
-                        .controlSize(.small)
-                        .accessibilityIdentifier("main.retryUploads")
-                        if appState.uploadStatus.failed > 0 {
-                            Button("Очистить failed") {
-                                appState.clearFailedUploads()
-                            }
-                            .controlSize(.small)
-                            .accessibilityIdentifier("main.clearFailed")
-                        }
-                        if appState.requiresReauthentication {
-                            Button("Повернуть токены…") {
-                                appState.presentOnboardingForRotation()
-                            }
-                            .controlSize(.small)
-                            .accessibilityIdentifier("main.rotateTokens")
-                        }
-                    }
-                }
+                UploadQueueView()
+                    .frame(maxWidth: 560)
             }
 
             if let errorMessage = appState.errorMessage {
@@ -92,8 +60,8 @@ struct ContentView: View {
             }
             .padding(.top, 6)
         }
-        .padding(40)
-        .frame(minWidth: 520, minHeight: 360)
+        .padding(32)
+        .frame(minWidth: 560, minHeight: 600)
         .task {
             await appState.bootstrap()
         }
