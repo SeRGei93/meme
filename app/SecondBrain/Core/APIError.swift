@@ -5,7 +5,7 @@ enum APIError: Error, Equatable, Sendable {
     case forbidden(requestID: String?)
     case notFound(requestID: String?)
     case rateLimited(retryAfter: Int?, requestID: String?)
-    case server(status: Int, code: String, message: String, requestID: String?)
+    case server(status: Int, code: String, message: String, field: String?, requestID: String?)
     case invalidResponse(status: Int)
     case invalidURL
     case decoding
@@ -28,7 +28,7 @@ enum APIError: Error, Equatable, Sendable {
         switch self {
         case .rateLimited, .transport(_, true):
             return true
-        case .server(let status, _, _, _):
+        case .server(let status, _, _, _, _):
             return [408, 425, 500, 502, 503, 504].contains(status)
         case .unauthorized, .forbidden, .notFound, .invalidResponse, .invalidURL, .decoding,
              .transport(_, false):
@@ -49,7 +49,7 @@ enum APIError: Error, Equatable, Sendable {
                 return "Слишком много запросов, повтор через \(retryAfter) с"
             }
             return "Слишком много запросов, попробуйте позже"
-        case .server(let status, _, let message, _):
+        case .server(let status, _, let message, _, _):
             return "Сервер ответил \(status): \(message)"
         case .invalidResponse(let status):
             return "Неожиданный ответ сервера (\(status))"
@@ -72,9 +72,11 @@ struct APIErrorEnvelope: Decodable, Equatable, Sendable {
     struct Payload: Decodable, Equatable, Sendable {
         struct Details: Decodable, Equatable, Sendable {
             let retryAfterSeconds: Int?
+            let field: String?
 
             enum CodingKeys: String, CodingKey {
                 case retryAfterSeconds = "retry_after_seconds"
+                case field
             }
         }
 

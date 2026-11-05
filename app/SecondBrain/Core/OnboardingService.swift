@@ -224,7 +224,7 @@ struct OnboardingService {
                     CreateClientRequest(name: name, kind: spec.kind, scopes: spec.scopes)
                 )
             } catch let error as APIError {
-                guard case .server(let status, _, _, _) = error, status == 409 else {
+                guard case .server(let status, _, _, _, _) = error, status == 409 else {
                     throw error
                 }
                 name = "\(spec.baseName)-\(sanitizedSuffix())"

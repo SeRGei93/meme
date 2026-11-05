@@ -132,12 +132,13 @@ final class APIClientTests: XCTestCase {
         StubURLProtocol.setHandler { _ in .init(status: 422, body: body) }
 
         await XCTAssertThrowsErrorAsync(try await client.search(query: "x", limit: 0)) { error in
-            guard case APIError.server(let status, let code, let message, let requestID) = error else {
+            guard case APIError.server(let status, let code, let message, let field, let requestID) = error else {
                 return XCTFail("expected .server, got \(error)")
             }
             XCTAssertEqual(status, 422)
             XCTAssertEqual(code, "validation_failed")
             XCTAssertEqual(message, "limit must be positive")
+            XCTAssertEqual(field, "limit")
             XCTAssertEqual(requestID, "req_2")
         }
     }
@@ -244,7 +245,7 @@ final class APIClientTests: XCTestCase {
         StubURLProtocol.setHandler { _ in .init(status: 503, body: Data()) }
 
         await XCTAssertThrowsErrorAsync(try await client.stats()) { error in
-            guard case APIError.server(let status, _, _, _) = error else {
+            guard case APIError.server(let status, _, _, _, _) = error else {
                 return XCTFail("expected .server, got \(error)")
             }
             XCTAssertEqual(status, 503)
@@ -352,7 +353,7 @@ final class APIClientTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(
             try await client.createClient(.init(name: "jarvis", kind: .jarvis, scopes: [.ingest]))
         ) { error in
-            guard case APIError.server(let status, let code, _, _) = error else {
+            guard case APIError.server(let status, let code, _, _, _) = error else {
                 return XCTFail("expected .server, got \(error)")
             }
             XCTAssertEqual(status, 409)

@@ -367,7 +367,7 @@ flowchart TB
 | Graph | Визуализация связей |
 | Projects | Список проектов |
 | Agents | Статус источников и клиентов: активность, токены, плагин |
-| Clients | Список клиентов, source/scopes, отзыв токена |
+| Clients | Список клиентов, выпуск agent-токена, отзыв и ротация |
 | Settings | URL, токены, launch at login |
 | API Client | HTTP-клиент к `brain` |
 | Spool Watcher | Наблюдение за `spool/` |
@@ -476,6 +476,7 @@ app/
       Clients/
         ClientsView.swift
         ClientsModel.swift
+        ClientCreateSheet.swift
       Graph/
         GraphView.swift
         GraphModel.swift
