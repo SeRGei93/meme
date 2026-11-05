@@ -14,7 +14,7 @@ import (
 func readClient(t *testing.T, st *store.Store, name string, kind auth.Kind) int64 {
 	t.Helper()
 
-	client, _, err := st.CreateClient(context.Background(), name, kind, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(context.Background(), name, kind, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient(%q) error = %v", name, err)
 	}
@@ -26,7 +26,7 @@ func saveReadMemory(t *testing.T, st *store.Store, clientID int64, externalID, p
 
 	result, err := st.SaveMemory(context.Background(), store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: externalID + "-key",
 		Request: memory.Request{
 			ExternalID: externalID,
@@ -49,7 +49,7 @@ func saveReadMemoryTextOnly(t *testing.T, st *store.Store, clientID int64, exter
 
 	result, err := st.SaveMemory(context.Background(), store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: externalID + "-key",
 		Request: memory.Request{
 			ExternalID: externalID,
@@ -69,7 +69,7 @@ func ingestReadSession(t *testing.T, st *store.Store, clientID int64, externalID
 
 	result, err := st.IngestSession(context.Background(), store.IngestParams{
 		ClientID:       clientID,
-		Source:         auth.SourceOpenCode,
+		Source:         "opencode",
 		IdempotencyKey: externalID + "-key",
 		Bundle: ingest.Bundle{
 			BundleID:    externalID + "-bundle",
@@ -236,7 +236,7 @@ func TestStatsAggregatesRecordsProjectsClientsAndJobs(t *testing.T) {
 
 	opencodeID := readClient(t, st, "stats-opencode", auth.KindOpenCode)
 	jarvisID := readClient(t, st, "stats-jarvis", auth.KindJarvis)
-	revoked, _, err := st.CreateClient(ctx, "stats-revoked", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	revoked, _, err := st.CreateClient(ctx, "stats-revoked", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient(revoked) error = %v", err)
 	}
@@ -279,7 +279,7 @@ func TestStatsAggregatesRecordsProjectsClientsAndJobs(t *testing.T) {
 	if stats.Records.Total != 6 || stats.Records.Final != 5 || stats.Records.Draft != 1 {
 		t.Errorf("records = %+v, want total 6, final 5, draft 1", stats.Records)
 	}
-	if stats.Records.BySource.OpenCode != 3 || stats.Records.BySource.Jarvis != 3 {
+	if stats.Records.BySource["opencode"] != 3 || stats.Records.BySource["jarvis"] != 3 {
 		t.Errorf("by_source = %+v, want opencode 3, jarvis 3", stats.Records.BySource)
 	}
 	wantCards := store.CardStatusCounts{Heuristic: 1, Queued: 2, OK: 2, Failed: 1}
@@ -299,7 +299,7 @@ func TestStatsAggregatesRecordsProjectsClientsAndJobs(t *testing.T) {
 	if stats.LastIngestAt == nil || !stats.LastIngestAt.Equal(base.Add(3*time.Hour)) {
 		t.Errorf("last_ingest_at = %v, want %v", stats.LastIngestAt, base.Add(3*time.Hour))
 	}
-	if stats.Database.Status != "ok" || stats.Database.SchemaVersion != 3 || stats.Database.SizeBytes <= 0 {
+	if stats.Database.Status != "ok" || stats.Database.SchemaVersion != 4 || stats.Database.SizeBytes <= 0 {
 		t.Errorf("database = %+v, want ok, schema 3, positive size", stats.Database)
 	}
 }

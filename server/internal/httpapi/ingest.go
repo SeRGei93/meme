@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/ingest"
 	"github.com/SeRGei93/meme/server/internal/store"
 )
@@ -26,17 +25,8 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		s.writeUnauthorized(w, r)
 		return
 	}
-	if principal.Client == nil || principal.Client.Kind != auth.KindOpenCode {
-		writeError(w, r, http.StatusForbidden, "forbidden",
-			"only opencode clients may ingest session bundles",
-			map[string]any{"required_kind": "opencode"})
-		return
-	}
-	source, ok := principal.Client.Source()
+	source, ok := s.knowledgeSource(w, r, principal)
 	if !ok {
-		writeError(w, r, http.StatusForbidden, "forbidden",
-			"client kind cannot produce a knowledge source",
-			map[string]any{"required_kind": "opencode"})
 		return
 	}
 

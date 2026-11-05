@@ -38,7 +38,7 @@ func seedReadMemory(t *testing.T, env *testEnv, clientID int64, externalID, proj
 func storeMemoryParams(clientID int64, externalID, projectKey string, keywords []string, now time.Time) store.MemoryParams {
 	return store.MemoryParams{
 		ClientID:       clientID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: externalID + "-key",
 		Request: memory.Request{
 			ExternalID: externalID,
@@ -91,7 +91,7 @@ type graphBody struct {
 
 func TestGetGraphReturnsNodesAndEdgesWithUIScope(t *testing.T) {
 	env := newTestEnv(t)
-	seed, _, err := env.store.CreateClient(context.Background(), "graph-seed", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	seed, _, err := env.store.CreateClient(context.Background(), "graph-seed", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -124,6 +124,26 @@ func TestGetGraphReturnsNodesAndEdgesWithUIScope(t *testing.T) {
 	}
 	if body.Truncated {
 		t.Error("truncated = true, want false")
+	}
+
+	for _, tt := range []struct {
+		source string
+		nodes  int
+	}{
+		{"jarvis", 2},
+		{"gitlab", 0},
+	} {
+		filtered := env.do(t, http.MethodGet, "/api/v1/graph?source="+tt.source, token, nil)
+		if filtered.Code != http.StatusOK {
+			t.Fatalf("source=%s status = %d, want 200 (body %s)", tt.source, filtered.Code, filtered.Body.String())
+		}
+		var filteredBody graphBody
+		if err := json.Unmarshal(filtered.Body.Bytes(), &filteredBody); err != nil {
+			t.Fatalf("decode graph source=%s: %v", tt.source, err)
+		}
+		if len(filteredBody.Nodes) != tt.nodes {
+			t.Errorf("source=%s nodes = %d, want %d", tt.source, len(filteredBody.Nodes), tt.nodes)
+		}
 	}
 
 	scoped := env.do(t, http.MethodGet, "/api/v1/graph?project_key=missing", token, nil)
@@ -211,21 +231,19 @@ func TestGetStatsReturnsAggregates(t *testing.T) {
 	if empty.LastIngestAt != nil {
 		t.Errorf("empty last_ingest_at = %v, want null", empty.LastIngestAt)
 	}
-	for _, key := range []string{"opencode", "jarvis"} {
-		if _, ok := empty.Records.BySource[key]; !ok {
-			t.Errorf("by_source is missing %q: %v", key, empty.Records.BySource)
-		}
+	if len(empty.Records.BySource) != 0 {
+		t.Errorf("empty by_source = %v, want an empty map", empty.Records.BySource)
 	}
 	for _, key := range []string{"heuristic", "queued", "ok", "failed"} {
 		if _, ok := empty.Records.ByCardStatus[key]; !ok {
 			t.Errorf("by_card_status is missing %q: %v", key, empty.Records.ByCardStatus)
 		}
 	}
-	if empty.Database.Status != "ok" || empty.Database.SchemaVersion != 3 || empty.Database.SizeBytes <= 0 {
-		t.Errorf("database = %+v, want ok, schema 3, positive size", empty.Database)
+	if empty.Database.Status != "ok" || empty.Database.SchemaVersion != 4 || empty.Database.SizeBytes <= 0 {
+		t.Errorf("database = %+v, want ok, schema 4, positive size", empty.Database)
 	}
 
-	seed, _, err := env.store.CreateClient(context.Background(), "stats-seed", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	seed, _, err := env.store.CreateClient(context.Background(), "stats-seed", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -245,8 +263,8 @@ func TestGetStatsReturnsAggregates(t *testing.T) {
 	if body.Records.Total != 2 || body.Records.Final != 2 || body.Records.Draft != 0 {
 		t.Errorf("records = %+v, want total 2, final 2, draft 0", body.Records)
 	}
-	if body.Records.BySource["jarvis"] != 2 || body.Records.BySource["opencode"] != 0 {
-		t.Errorf("by_source = %v, want jarvis 2, opencode 0", body.Records.BySource)
+	if body.Records.BySource["jarvis"] != 2 || len(body.Records.BySource) != 1 {
+		t.Errorf("by_source = %v, want only jarvis 2", body.Records.BySource)
 	}
 	if body.Records.ByCardStatus["ok"] != 2 {
 		t.Errorf("by_card_status = %v, want ok 2", body.Records.ByCardStatus)
@@ -261,7 +279,7 @@ func TestGetStatsReturnsAggregates(t *testing.T) {
 
 func TestListProjectsReturnsItemsAndHonorsLimit(t *testing.T) {
 	env := newTestEnv(t)
-	seed, _, err := env.store.CreateClient(context.Background(), "projects-seed", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	seed, _, err := env.store.CreateClient(context.Background(), "projects-seed", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}

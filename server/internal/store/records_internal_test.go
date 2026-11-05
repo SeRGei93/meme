@@ -20,7 +20,7 @@ func TestIngestReplayReturnsExistingJobAfterCompletion(t *testing.T) {
 		_ = st.Close()
 	})
 
-	client, _, err := st.CreateClient(ctx, "opencode-capture", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(ctx, "opencode-capture", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}

@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-// SourceCounts is the per-source record breakdown required by GET
-// /api/v1/stats. Both v1 sources are always present, even when zero.
-type SourceCounts struct {
-	OpenCode int
-	Jarvis   int
-}
-
 // CardStatusCounts is the per-card-status record breakdown.
 type CardStatusCounts struct {
 	Heuristic int
@@ -35,7 +28,7 @@ type RecordStats struct {
 	Total        int
 	Final        int
 	Draft        int
-	BySource     SourceCounts
+	BySource     map[string]int
 	ByCardStatus CardStatusCounts
 }
 
@@ -69,12 +62,6 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}
 	stats.Records.Draft = stats.Records.Total - stats.Records.Final
 
-	if err := s.countGrouped(ctx, `SELECT source, COUNT(*) FROM records GROUP BY source`, map[string]*int{
-		"opencode": &stats.Records.BySource.OpenCode,
-		"jarvis":   &stats.Records.BySource.Jarvis,
-	}); err != nil {
-		return Stats{}, fmt.Errorf("count records by source: %w", err)
-	}
 	if err := s.countGrouped(ctx, `SELECT card_status, COUNT(*) FROM records GROUP BY card_status`, map[string]*int{
 		CardStatusHeuristic: &stats.Records.ByCardStatus.Heuristic,
 		CardStatusQueued:    &stats.Records.ByCardStatus.Queued,
@@ -83,6 +70,12 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}); err != nil {
 		return Stats{}, fmt.Errorf("count records by card status: %w", err)
 	}
+
+	bySource, err := s.countBySource(ctx)
+	if err != nil {
+		return Stats{}, fmt.Errorf("count records by source: %w", err)
+	}
+	stats.Records.BySource = bySource
 
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects`).Scan(&stats.Projects); err != nil {
 		return Stats{}, fmt.Errorf("count projects: %w", err)
@@ -147,6 +140,30 @@ func (s *Store) countGrouped(ctx context.Context, query string, dest map[string]
 		}
 	}
 	return rows.Err()
+}
+
+func (s *Store) countBySource(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT source, COUNT(*) FROM records GROUP BY source`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var (
+			source string
+			count  int
+		)
+		if err := rows.Scan(&source, &count); err != nil {
+			return nil, err
+		}
+		counts[source] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return counts, nil
 }
 
 func (s *Store) databaseSize(ctx context.Context) (int64, error) {

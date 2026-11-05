@@ -2,7 +2,7 @@
 
 ## Project
 
-Second Brain — центральная память для OpenCode и Jarvis.
+Second Brain — центральная память для любых агентов по токену; OpenCode и Jarvis — первые интеграции.
 
 - Сервер: Go, SQLite + FTS5, MCP, Dokploy.
 - Локально: SwiftUI `.app`, собирается в Xcode.

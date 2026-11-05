@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -76,9 +77,9 @@ func (b mcpBackend) Search(ctx context.Context, _ mcp.CallContext, raw json.RawM
 	}
 	source := ""
 	if args.Source != nil {
-		source = *args.Source
-		if !auth.ValidSource(source) {
-			return nil, validationError("source", "must be opencode or jarvis")
+		source = strings.TrimSpace(*args.Source)
+		if runeLen(source) < 1 || runeLen(source) > auth.MaxSourceQueryLen {
+			return nil, validationError("source", "must be 1-"+strconv.Itoa(auth.MaxSourceQueryLen)+" characters")
 		}
 	}
 

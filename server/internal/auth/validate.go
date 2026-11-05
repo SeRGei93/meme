@@ -19,8 +19,13 @@ func (e *ValidationError) Error() string {
 	return e.Message
 }
 
-// ValidateClient applies the client rules from the v1 contract.
-func ValidateClient(name string, kind Kind, scopes []Scope) error {
+// ValidateClient applies the client rules from the v1 contract. Legacy kinds
+// are normalized before validation. An agent client must carry an effective
+// source; ui and admin clients have none. Store.CreateClient derives the
+// default source before calling this function.
+func ValidateClient(name string, kind Kind, source string, scopes []Scope) error {
+	kind = NormalizeKind(kind)
+
 	switch {
 	case name == "":
 		return &ValidationError{Field: "name", Message: "name is required"}
@@ -28,12 +33,24 @@ func ValidateClient(name string, kind Kind, scopes []Scope) error {
 		return &ValidationError{Field: "name", Message: "name must be at most 100 characters"}
 	case !clientNamePattern.MatchString(name):
 		return &ValidationError{Field: "name", Message: `name may contain only letters, digits, ".", "_", ":", and "-"`}
-	case !kind.Valid():
+	case !kind.Stored():
 		return &ValidationError{Field: "kind", Message: fmt.Sprintf("kind must be one of %s", kindList())}
 	case len(scopes) == 0:
 		return &ValidationError{Field: "scopes", Message: "scopes must contain at least one scope"}
 	case len(scopes) > 5:
 		return &ValidationError{Field: "scopes", Message: "scopes must contain at most 5 scopes"}
+	}
+
+	if kind.AllowsSource() {
+		if source == "" {
+			return &ValidationError{Field: "source", Message: "source is required for agent clients"}
+		}
+		if !ValidSourceSlug(source) {
+			return &ValidationError{Field: "source", Message: fmt.Sprintf(
+				"source must be a lowercase slug of 1-%d characters ([a-z0-9._-], starting with a letter or digit)", MaxSourceLen)}
+		}
+	} else if source != "" {
+		return &ValidationError{Field: "source", Message: fmt.Sprintf("source must be empty for kind %s", kind)}
 	}
 
 	seen := make(map[Scope]bool, len(scopes))
@@ -51,8 +68,8 @@ func ValidateClient(name string, kind Kind, scopes []Scope) error {
 }
 
 func kindList() string {
-	values := make([]string, len(allKinds))
-	for i, kind := range allKinds {
+	values := make([]string, len(storedKinds))
+	for i, kind := range storedKinds {
 		values[i] = string(kind)
 	}
 	return strings.Join(values, ", ")

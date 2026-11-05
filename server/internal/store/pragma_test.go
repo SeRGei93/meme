@@ -54,7 +54,7 @@ func TestFindClientByTokenHashExcludesRevokedClients(t *testing.T) {
 	}
 	defer st.Close()
 
-	client, token, err := st.CreateClient(context.Background(), "revoked", auth.KindUI, []auth.Scope{auth.ScopeUI})
+	client, token, err := st.CreateClient(context.Background(), "revoked", auth.KindUI, "", []auth.Scope{auth.ScopeUI})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestClientsTableStoresTokenHashOnly(t *testing.T) {
 	}
 	defer st.Close()
 
-	_, token, err := st.CreateClient(context.Background(), "hashed", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	_, token, err := st.CreateClient(context.Background(), "hashed", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func openSearchStore(t *testing.T) (*Store, int64) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	client, _, err := st.CreateClient(context.Background(), "search-fixture", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(context.Background(), "search-fixture", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -429,7 +430,7 @@ func TestSearchRejectsInvalidParams(t *testing.T) {
 		{"empty query", SearchParams{Query: " "}},
 		{"limit too large", SearchParams{Query: "needle", Limit: search.MaxLimit + 1}},
 		{"limit negative", SearchParams{Query: "needle", Limit: -1}},
-		{"unknown source", SearchParams{Query: "needle", Source: "unknown"}},
+		{"source too long", SearchParams{Query: "needle", Source: strings.Repeat("a", 101)}},
 		{"inverted range", SearchParams{Query: "needle", Since: &later, Until: &now}},
 	}
 	for _, tt := range tests {

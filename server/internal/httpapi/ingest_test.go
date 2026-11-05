@@ -122,7 +122,7 @@ func getRecord(t *testing.T, env *testEnv, token string, id int64) recordBody {
 func newIngestEnv(t *testing.T) (*testEnv, string, string) {
 	t.Helper()
 	env := newTestEnv(t)
-	ingestToken := createClientToken(t, env, "opencode-capture", "opencode", []string{"ingest"})
+	ingestToken := createClientToken(t, env, "opencode", "opencode", []string{"ingest"})
 	readToken := createClientToken(t, env, "ui-reader", "ui", []string{"ui"})
 	return env, ingestToken, readToken
 }
@@ -624,20 +624,20 @@ func TestIngestRejectsMalformedRequests(t *testing.T) {
 	}
 }
 
-func TestIngestRequiresOpenCodeClientAndIngestScope(t *testing.T) {
+func TestIngestRequiresSourceAndIngestScope(t *testing.T) {
 	env := newTestEnv(t)
-	jarvisToken := createClientToken(t, env, "jarvis", "jarvis", []string{"ingest"})
+	agentToken := createClientToken(t, env, "agent-capture", "agent", []string{"ingest"})
 	uiToken := createClientToken(t, env, "ui-with-ingest", "ui", []string{"ingest"})
-	opencodeWithoutIngest := createClientToken(t, env, "opencode-reader", "opencode", []string{"mcp:read"})
+	agentWithoutIngest := createClientToken(t, env, "agent-reader", "agent", []string{"mcp:read"})
 
 	tests := []struct {
 		name   string
 		token  string
 		status int
 	}{
-		{"jarvis cannot ingest sessions", jarvisToken, http.StatusForbidden},
-		{"ui cannot ingest sessions", uiToken, http.StatusForbidden},
-		{"opencode needs ingest scope", opencodeWithoutIngest, http.StatusForbidden},
+		{"agent can ingest sessions", agentToken, http.StatusAccepted},
+		{"ui has no knowledge source", uiToken, http.StatusForbidden},
+		{"agent needs ingest scope", agentWithoutIngest, http.StatusForbidden},
 		{"bootstrap admin has no source", testAdminToken, http.StatusForbidden},
 	}
 	for _, tt := range tests {
@@ -646,8 +646,10 @@ func TestIngestRequiresOpenCodeClientAndIngestScope(t *testing.T) {
 			if rec.Code != tt.status {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.status, rec.Body.String())
 			}
-			if code := decodeError(t, rec).Error.Code; code != "forbidden" {
-				t.Errorf("code = %q, want forbidden", code)
+			if tt.status != http.StatusAccepted {
+				if code := decodeError(t, rec).Error.Code; code != "forbidden" {
+					t.Errorf("code = %q, want forbidden", code)
+				}
 			}
 		})
 	}
@@ -716,7 +718,7 @@ func TestGetRecordRequiresReadScopeAndRejectsBadIDs(t *testing.T) {
 
 func TestIngestUsesClientSourceNotRequestField(t *testing.T) {
 	env := newTestEnv(t)
-	ingestToken := createClientToken(t, env, "opencode-capture", "opencode", []string{"ingest"})
+	ingestToken := createClientWithSource(t, env, "opencode-capture", "opencode", "opencode", []string{"ingest"}).Token
 	readToken := createClientToken(t, env, "reader", "ui", []string{"ui"})
 
 	accepted := decodeIngestResponse(t, doIngest(t, env, ingestToken, validBundle(), ""))

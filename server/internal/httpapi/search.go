@@ -114,12 +114,12 @@ func parseSearchParams(w http.ResponseWriter, r *http.Request) (store.SearchPara
 		return invalid("project_key", "project_key must be at most "+strconv.Itoa(searchMaxParamLen)+" characters")
 	}
 
-	source := query.Get("source")
+	source := strings.TrimSpace(query.Get("source"))
 	if query.Has("source") && source == "" {
-		return invalid("source", "source must be opencode or jarvis")
+		return invalid("source", "source must not be empty")
 	}
-	if source != "" && !auth.ValidSource(source) {
-		return invalid("source", "source must be opencode or jarvis")
+	if utf8.RuneCountInString(source) > auth.MaxSourceQueryLen {
+		return invalid("source", "source must be at most "+strconv.Itoa(auth.MaxSourceQueryLen)+" characters")
 	}
 
 	since, ok := parseSearchTime(w, r, query.Get("since"), "since")

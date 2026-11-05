@@ -23,6 +23,7 @@ const (
 type createClientRequest struct {
 	Name   string       `json:"name"`
 	Kind   auth.Kind    `json:"kind"`
+	Source string       `json:"source"`
 	Scopes []auth.Scope `json:"scopes"`
 }
 
@@ -120,15 +121,19 @@ func (s *server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := auth.ValidateClient(request.Name, request.Kind, request.Scopes); err != nil {
-		s.writeClientValidationError(w, r, err)
-		return
-	}
-
-	client, token, err := s.store.CreateClient(r.Context(), request.Name, request.Kind, request.Scopes)
+	client, token, err := s.store.CreateClient(r.Context(), request.Name, request.Kind, request.Source, request.Scopes)
 	switch {
 	case errors.Is(err, store.ErrClientNameTaken):
-		writeError(w, r, http.StatusConflict, "conflict", "client name is already in use", nil)
+		writeError(w, r, http.StatusConflict, "conflict", "client name is already in use",
+			map[string]any{"field": "name"})
+		return
+	case errors.Is(err, store.ErrClientSourceTaken):
+		writeError(w, r, http.StatusConflict, "conflict",
+			"client source is already in use; pass an explicit source if it was derived from the name",
+			map[string]any{"field": "source"})
+		return
+	case errors.Is(err, store.ErrClientConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "client conflicts with an active client", nil)
 		return
 	case errors.Is(err, store.ErrInvalidClient):
 		s.writeClientValidationError(w, r, err)
@@ -224,7 +229,7 @@ func toClientResponse(client auth.Client) clientResponse {
 	copy(scopes, client.Scopes)
 
 	var source *string
-	if value, ok := client.Source(); ok {
+	if value, ok := client.KnowledgeSource(); ok {
 		source = &value
 	}
 

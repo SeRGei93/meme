@@ -107,7 +107,6 @@ func TestSearchValidatesParameters(t *testing.T) {
 		{"limit zero", "q=needle&limit=0", "limit"},
 		{"limit too large", "q=needle&limit=51", "limit"},
 		{"limit not a number", "q=needle&limit=abc", "limit"},
-		{"unknown source", "q=needle&source=gitlab", "source"},
 		{"empty source", "q=needle&source=", "source"},
 		{"empty project key", "q=needle&project_key=", "project_key"},
 		{"invalid since", "q=needle&since=yesterday", "since"},
@@ -178,6 +177,10 @@ func TestSearchFiltersByProjectAndDate(t *testing.T) {
 	jarvis := decodeSearch(t, doSearch(t, env, readToken, "q=sqlite&source=jarvis"))
 	if jarvis.Total != 0 {
 		t.Errorf("source=jarvis total = %d, want 0", jarvis.Total)
+	}
+	unknown := decodeSearch(t, doSearch(t, env, readToken, "q=sqlite&source=gitlab"))
+	if unknown.Total != 0 {
+		t.Errorf("source=gitlab total = %d, want 0 (arbitrary sources are allowed)", unknown.Total)
 	}
 
 	since := url.QueryEscape("2026-11-03T00:00:00Z")

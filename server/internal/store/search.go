@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SeRGei93/meme/server/internal/auth"
 	"github.com/SeRGei93/meme/server/internal/search"
@@ -81,8 +82,8 @@ func (s *Store) Search(ctx context.Context, params SearchParams) (SearchResult, 
 	if limit < 1 || limit > search.MaxLimit {
 		return SearchResult{}, fmt.Errorf("%w: limit must be between 1 and %d", ErrInvalidSearch, search.MaxLimit)
 	}
-	if params.Source != "" && !auth.ValidSource(params.Source) {
-		return SearchResult{}, fmt.Errorf("%w: source must be opencode or jarvis", ErrInvalidSearch)
+	if params.Source != "" && utf8.RuneCountInString(params.Source) > auth.MaxSourceQueryLen {
+		return SearchResult{}, fmt.Errorf("%w: source must be at most %d characters", ErrInvalidSearch, auth.MaxSourceQueryLen)
 	}
 	if params.Since != nil && params.Until != nil && params.Since.After(*params.Until) {
 		return SearchResult{}, fmt.Errorf("%w: since must not be after until", ErrInvalidSearch)

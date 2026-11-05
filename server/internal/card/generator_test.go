@@ -36,7 +36,7 @@ func openCardStore(t *testing.T) (*store.Store, int64, int64, int64) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	client, _, err := st.CreateClient(context.Background(), "card-generator", auth.KindOpenCode, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(context.Background(), "card-generator", auth.KindOpenCode, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -358,7 +358,7 @@ func TestGeneratorCreatesACardForATextOnlyMemory(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := context.Background()
-	client, _, err := st.CreateClient(ctx, "jarvis-memory", auth.KindJarvis, []auth.Scope{auth.ScopeIngest})
+	client, _, err := st.CreateClient(ctx, "jarvis-memory", auth.KindJarvis, "", []auth.Scope{auth.ScopeIngest})
 	if err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
@@ -366,7 +366,7 @@ func TestGeneratorCreatesACardForATextOnlyMemory(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	saved, err := st.SaveMemory(ctx, store.MemoryParams{
 		ClientID:       client.ID,
-		Source:         auth.SourceJarvis,
+		Source:         "jarvis",
 		IdempotencyKey: "memory-generate",
 		Request: memory.Request{
 			ExternalID: "evt_generate",

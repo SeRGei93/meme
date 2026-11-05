@@ -20,8 +20,8 @@ func newMemoryEnv(t *testing.T) (env *testEnv, jarvisToken, opencodeToken, readT
 	t.Helper()
 
 	env = newTestEnv(t)
-	jarvisToken = createClientToken(t, env, "jarvis-writer", "jarvis", []string{"ingest"})
-	opencodeToken = createClientToken(t, env, "opencode-remember", "opencode", []string{"ingest"})
+	jarvisToken = createClientWithSource(t, env, "jarvis-writer", "jarvis", "jarvis", []string{"ingest"}).Token
+	opencodeToken = createClientWithSource(t, env, "opencode-remember", "opencode", "opencode", []string{"ingest"}).Token
 	readToken = createClientToken(t, env, "ui-reader", "ui", []string{"ui"})
 	return env, jarvisToken, opencodeToken, readToken
 }
