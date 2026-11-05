@@ -389,6 +389,46 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(components.queryItems?.first { $0.name == "cursor" }?.value, "abc")
     }
 
+    func testGraphSendsFiltersAndDecodesNodesAndEdges() async throws {
+        let body = Data("""
+        {"nodes":[
+          {"id":1,"title":"SQLite migration ordering","project_key":"github.com/example/meme",
+           "source":"opencode","kind":"session","updated_at":"2026-11-05T10:00:00Z"}
+        ],"edges":[
+          {"from_id":1,"to_id":2,"weight":0.75,"reason":"keywords"}
+        ],"truncated":true}
+        """.utf8)
+        StubURLProtocol.setHandler { _ in .init(body: body) }
+
+        let graph = try await client.graph(
+            projectKey: "github.com/example/meme",
+            limit: 400,
+            minWeight: 0.2
+        )
+
+        XCTAssertEqual(graph.nodes.count, 1)
+        XCTAssertEqual(graph.nodes[0].projectKey, "github.com/example/meme")
+        XCTAssertEqual(graph.nodes[0].source, "opencode")
+        XCTAssertEqual(graph.edges.count, 1)
+        XCTAssertEqual(graph.edges[0].fromID, 1)
+        XCTAssertEqual(graph.edges[0].toID, 2)
+        XCTAssertEqual(graph.edges[0].weight, 0.75)
+        XCTAssertEqual(graph.edges[0].reason, .keywords)
+        XCTAssertTrue(graph.truncated)
+
+        let sent = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.url?.path, "/api/v1/graph")
+        let components = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(sent.url), resolvingAgainstBaseURL: false)
+        )
+        XCTAssertEqual(
+            components.queryItems?.first { $0.name == "project_key" }?.value,
+            "github.com/example/meme"
+        )
+        XCTAssertEqual(components.queryItems?.first { $0.name == "limit" }?.value, "400")
+        XCTAssertEqual(components.queryItems?.first { $0.name == "min_weight" }?.value, "0.2")
+    }
+
     private static let healthJSON = """
     {
       "status": "ok",

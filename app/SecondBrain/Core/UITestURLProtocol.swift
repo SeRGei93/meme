@@ -42,6 +42,18 @@ final class UITestURLProtocol: URLProtocol {
             }
         case "/api/v1/projects":
             payload = (200, Self.projectsResponse())
+        case "/api/v1/graph":
+            switch ProcessInfo.processInfo.environment["SECOND_BRAIN_UI_GRAPH"] {
+            case "empty":
+                payload = (200, Self.graphResponse(nodes: [], edges: [], truncated: false))
+            case "error":
+                payload = (
+                    500,
+                    Data(#"{"error":{"code":"internal_error","message":"ui-test graph failure"}}"#.utf8)
+                )
+            default:
+                payload = (200, Self.graphResponse(query: query))
+            }
         case "/api/v1/jobs":
             payload = (200, Self.jobsResponse(query: query))
         case "/api/v1/clients":
@@ -221,6 +233,79 @@ final class UITestURLProtocol: URLProtocol {
         return (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
             ?? Data("{}".utf8)
     }
+
+    private static func graphResponse(query: [String: String]) -> Data {
+        let project = query["project_key"]
+        let nodes = graphNodes.filter {
+            guard let project else { return true }
+            return $0["project_key"] as? String == project
+        }
+        let ids = Set(nodes.compactMap { $0["id"] as? Int })
+        let edges = graphEdges.filter {
+            guard
+                let from = $0["from_id"] as? Int,
+                let to = $0["to_id"] as? Int
+            else { return false }
+            return ids.contains(from) && ids.contains(to)
+        }
+        return graphResponse(nodes: nodes, edges: edges, truncated: false)
+    }
+
+    private static func graphResponse(
+        nodes: [[String: Any]],
+        edges: [[String: Any]],
+        truncated: Bool
+    ) -> Data {
+        let body: [String: Any] = [
+            "nodes": nodes,
+            "edges": edges,
+            "truncated": truncated,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
+            ?? Data("{}".utf8)
+    }
+
+    private static let graphNodes: [[String: Any]] = [
+        [
+            "id": 1,
+            "title": "Jarvis SQLite notes",
+            "project_key": "jarvis",
+            "source": "jarvis",
+            "kind": "memory",
+            "updated_at": "2026-11-04T10:00:00Z",
+        ],
+        [
+            "id": 2,
+            "title": "SQLite migration ordering",
+            "project_key": "github.com/example/meme",
+            "source": "opencode",
+            "kind": "session",
+            "updated_at": "2026-11-05T10:00:00Z",
+        ],
+        [
+            "id": 3,
+            "title": "Spool upload retries",
+            "project_key": "github.com/example/meme",
+            "source": "opencode",
+            "kind": "session",
+            "updated_at": "2026-11-05T11:00:00Z",
+        ],
+    ]
+
+    private static let graphEdges: [[String: Any]] = [
+        [
+            "from_id": 1,
+            "to_id": 2,
+            "weight": 0.4,
+            "reason": "keywords",
+        ],
+        [
+            "from_id": 2,
+            "to_id": 3,
+            "weight": 0.9,
+            "reason": "project",
+        ],
+    ]
 
     private static let jobs: [[String: Any]] = [
         [

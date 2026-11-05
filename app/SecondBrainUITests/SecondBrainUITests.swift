@@ -163,6 +163,74 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["agents.queue.failed"].exists)
     }
 
+    func testGraphRendersNodesFiltersBySourceAndOpensCard() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "graph"
+        )
+        app.launch()
+
+        let opencodeNode = app.buttons["graph.node.2"]
+        XCTAssertTrue(opencodeNode.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["graph.node.1"].exists)
+        XCTAssertTrue(app.buttons["graph.node.3"].exists)
+
+        let sourceFilter = element("graph.sourceFilter", in: app)
+        XCTAssertTrue(sourceFilter.waitForExistence(timeout: 5))
+        sourceFilter.click()
+        let jarvis = app.descendants(matching: .menuItem)
+            .matching(NSPredicate(format: "title == %@", "Jarvis"))
+            .firstMatch
+        XCTAssertTrue(jarvis.waitForExistence(timeout: 5))
+        jarvis.click()
+
+        XCTAssertTrue(app.buttons["graph.node.1"].waitForExistence(timeout: 10))
+        let removed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: opencodeNode
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [removed], timeout: 10),
+            .completed,
+            "source filter must hide OpenCode nodes"
+        )
+
+        app.buttons["graph.node.1"].click()
+        let title = app.staticTexts["record.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.value as? String, "Jarvis SQLite notes")
+    }
+
+    func testGraphShowsEmptyState() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "graph",
+            uiGraph: "empty"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("graph.empty", in: app).waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Граф пока пуст"].exists)
+    }
+
+    func testGraphShowsErrorAndRetry() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiSection: "graph",
+            uiGraph: "error"
+        )
+        app.launch()
+
+        XCTAssertTrue(element("graph.error", in: app).waitForExistence(timeout: 20))
+        let retry = app.buttons["graph.retry"]
+        XCTAssertTrue(retry.exists)
+        retry.click()
+        XCTAssertTrue(element("graph.error", in: app).waitForExistence(timeout: 10))
+    }
+
     func testSearchScreenIsUsableInLightAppearance() throws {
         let app = configuredApp()
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
@@ -447,7 +515,8 @@ final class SecondBrainUITests: XCTestCase {
         uiQuery: String? = nil,
         uiRawQuery: String? = nil,
         uiSection: String? = nil,
-        uiTokens: String? = nil
+        uiTokens: String? = nil,
+        uiGraph: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
@@ -480,6 +549,9 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let uiTokens {
             app.launchEnvironment["SECOND_BRAIN_UI_TOKENS"] = uiTokens
+        }
+        if let uiGraph {
+            app.launchEnvironment["SECOND_BRAIN_UI_GRAPH"] = uiGraph
         }
         return app
     }

@@ -48,10 +48,11 @@ menu bar или кнопку Quit.
 `app/SecondBrain/Core`:
 
 - `APIClient` — `URLSession` + async/await, типизированные `GET /health`,
-  `/api/v1/search`, `/records/{id}`, `/projects`, `/stats`, `/jobs`, `/clients`;
+  `/api/v1/search`, `/records/{id}`, `/projects`, `/stats`, `/jobs`, `/clients`,
+  `/graph`;
 - `APIModels` — `Codable`-модели контрактов (`Health`, `Card`, `Record`,
-  `SearchResponse`, `Project`, `Stats`, `IngestJob`, `ClientInfo`, произвольный
-  `JSONValue`);
+  `SearchResponse`, `Project`, `Stats`, `IngestJob`, `ClientInfo`, `MemoryGraph`,
+  произвольный `JSONValue`);
 - `APIError` — разбор `ErrorEnvelope`, флаги `isRetryable` и
   `requiresReauthentication` для `401/403`;
 - `KeychainStore` — bearer-токены в Keychain по аккаунтам `opencode`, `jarvis`,
@@ -131,16 +132,16 @@ Settings показывает и меняет:
 Для UI-тестов и нестандартных установок доступны переменные окружения
 `SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode), `SECOND_BRAIN_PLUGIN_SOURCE`
 (каталог с файлами плагина), `SECOND_BRAIN_UI_TOKEN` (подменить `ui`-токен в
-Debug), `SECOND_BRAIN_UI_MOCK=1` (in-process mock API), `SECOND_BRAIN_UI_QUERY`
+Debug), `SECOND_BRAIN_UI_MOCK=1` (in-process mock API), `SECOND_BRAIN_UI_QUERY`,
 `SECOND_BRAIN_UI_RAW_QUERY` (стартовый запрос и raw-фильтр), `SECOND_BRAIN_UI_SECTION`
-(стартовый раздел) и `SECOND_BRAIN_UI_TOKENS` (подменить наличие токенов) для
-UI-тестов.
+(стартовый раздел), `SECOND_BRAIN_UI_TOKENS` (подменить наличие токенов) и
+`SECOND_BRAIN_UI_GRAPH` (`empty`/`error` — состояние графа) для UI-тестов.
 
 ## Поиск и карточка
 
-Главное окно — двухколоночный интерфейс: слева навигация (Обзор, Поиск,
-Проекты, Агенты), статус, очередь загрузки и настройки; справа — выбранный
-раздел.
+Главное окно — двухколоночный интерфейс: слева навигация (Поиск, Обзор,
+Проекты, Агенты, Граф), статус, очередь загрузки и настройки; справа —
+выбранный раздел.
 
 - Запрос отправляется с debounce 300 мс; пустая строка не делает запрос.
 - Фильтры: проект (из `/api/v1/projects`), источник (`opencode`/`jarvis`) и
@@ -174,6 +175,22 @@ UI-тестов.
 - Данные читаются `ui`-токеном (`ui` + `admin`), запросы идут асинхронно и не
   блокируют окно. Ошибки загрузки статистики, jobs или клиентов показываются
   отдельно и не скрывают уже полученные данные.
+
+## Граф памяти
+
+- Граф строится из `GET /api/v1/graph` (до 400 узлов) и рисуется одним
+  `Canvas` для связей плюс отдельными кнопками-узлами, поэтому каждый узел
+  кликабелен и доступен через VoiceOver.
+- Force-directed layout (Fruchterman–Reingold) детерминирован и выполняется в
+  `Task.detached`, а не на main actor; для больших графов число итераций
+  снижается, интерфейс всё это время остаётся отзывчивым.
+- Фильтр по проекту уходит на сервер (`project_key`), фильтр по источнику
+  применяется локально по `source`; связи, у которых пропал хотя бы один
+  конец, скрываются.
+- Клик по узлу открывает карточку записи в sheet поверх графа; загрузка,
+  ошибка и повтор используют те же состояния, что и поиск.
+- Пустой граф, граф без узлов после фильтра, ошибка загрузки и усечённый
+  ответ сервера имеют отдельные подписи.
 
 ## Spool watcher и UploadQueue
 

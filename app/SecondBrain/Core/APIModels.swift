@@ -149,6 +149,53 @@ struct ProjectList: Codable, Equatable, Sendable {
     let items: [Project]
 }
 
+// MARK: - Graph
+
+enum GraphEdgeReason: String, Codable, Equatable, Sendable {
+    case project
+    case keywords
+}
+
+struct GraphNode: Codable, Equatable, Sendable, Identifiable {
+    let id: Int64
+    let title: String
+    let projectKey: String
+    let source: String
+    let kind: String
+    let updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case projectKey = "project_key"
+        case source
+        case kind
+        case updatedAt = "updated_at"
+    }
+}
+
+struct GraphEdge: Codable, Equatable, Sendable, Identifiable {
+    var id: String { "\(fromID)->\(toID)" }
+
+    let fromID: Int64
+    let toID: Int64
+    let weight: Double
+    let reason: GraphEdgeReason
+
+    enum CodingKeys: String, CodingKey {
+        case fromID = "from_id"
+        case toID = "to_id"
+        case weight
+        case reason
+    }
+}
+
+struct MemoryGraph: Codable, Equatable, Sendable {
+    let nodes: [GraphNode]
+    let edges: [GraphEdge]
+    let truncated: Bool
+}
+
 // MARK: - Stats
 
 struct Stats: Codable, Equatable, Sendable {

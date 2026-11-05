@@ -376,21 +376,9 @@ struct SourceBadge: View {
             .accessibilityLabel("Источник: \(title)")
     }
 
-    private var title: String {
-        switch source {
-        case MemorySource.jarvis.rawValue: return "Jarvis"
-        case MemorySource.opencode.rawValue: return "OpenCode"
-        default: return source.capitalized
-        }
-    }
+    private var title: String { SourceStyle.title(for: source) }
 
-    private var tint: Color {
-        switch source {
-        case MemorySource.jarvis.rawValue: return .purple
-        case MemorySource.opencode.rawValue: return .blue
-        default: return .secondary
-        }
-    }
+    private var tint: Color { SourceStyle.tint(for: source) }
 }
 
 private struct RecordDetailPane: View {
