@@ -231,6 +231,52 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(element("graph.error", in: app).waitForExistence(timeout: 10))
     }
 
+    func testMenuBarQuickSearchOpensCard() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiMenuQuery: "sqlite"
+        )
+        app.launch()
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        window.buttons[XCUIIdentifierCloseWindow].click()
+
+        let statusItem = app.statusItems["Second Brain"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
+        statusItem.click()
+
+        let search = app.textFields["menubar.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["menubar.queueState"].exists)
+        XCTAssertTrue(app.staticTexts["menubar.pending"].exists)
+
+        XCTAssertEqual(search.value as? String, "sqlite")
+        let result = app.buttons["menubar.result.2"]
+        XCTAssertTrue(result.waitForExistence(timeout: 15))
+        result.click()
+
+        let title = app.staticTexts["record.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        XCTAssertEqual(title.value as? String, "SQLite migration ordering")
+    }
+
+    func testMenuBarOpensDashboard() throws {
+        let app = configuredApp(uiToken: "sb_ui_test", mockAPI: true)
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+
+        let statusItem = app.statusItems["Second Brain"]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
+        statusItem.click()
+
+        let dashboard = app.buttons["menubar.dashboard"]
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10))
+        dashboard.click()
+        XCTAssertTrue(app.staticTexts["dashboard.recordsTotal"].waitForExistence(timeout: 15))
+    }
+
     func testSearchScreenIsUsableInLightAppearance() throws {
         let app = configuredApp()
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
@@ -516,7 +562,8 @@ final class SecondBrainUITests: XCTestCase {
         uiRawQuery: String? = nil,
         uiSection: String? = nil,
         uiTokens: String? = nil,
-        uiGraph: String? = nil
+        uiGraph: String? = nil,
+        uiMenuQuery: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["SECOND_BRAIN_SKIP_ONBOARDING"] = "1"
@@ -552,6 +599,9 @@ final class SecondBrainUITests: XCTestCase {
         }
         if let uiGraph {
             app.launchEnvironment["SECOND_BRAIN_UI_GRAPH"] = uiGraph
+        }
+        if let uiMenuQuery {
+            app.launchEnvironment["SECOND_BRAIN_UI_MENU_QUERY"] = uiMenuQuery
         }
         return app
     }

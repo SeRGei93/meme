@@ -14,6 +14,10 @@ struct ContentView: View {
         .frame(minWidth: 980, minHeight: 640)
         .task {
             await appState.bootstrap()
+            openPendingRecord()
+        }
+        .onChange(of: appState.pendingRecordID) { _, _ in
+            openPendingRecord()
         }
         .sheet(isPresented: Binding(
             get: { appState.isOnboardingPresented },
@@ -42,5 +46,20 @@ struct ContentView: View {
         case .graph:
             GraphView()
         }
+    }
+
+    /// Menu bar quick search hands a record id to the window; consume it once
+    /// so a later navigation does not reopen an unrelated card. The client is
+    /// set before selecting, because the search view may be created after this
+    /// callback and its `onAppear` no longer wipes the selection.
+    private func openPendingRecord() {
+        guard let id = appState.consumePendingRecord() else { return }
+        searchModel.setClient(appState.makeReadClient())
+        // A changed client schedules a re-run of the current query; clearing it
+        // first guarantees that re-run cannot replace the requested record.
+        if !searchModel.trimmedQuery.isEmpty {
+            searchModel.query = ""
+        }
+        searchModel.openRecord(id: id)
     }
 }

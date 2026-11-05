@@ -23,37 +23,16 @@ struct SecondBrainApp: App {
         }
 
         MenuBarExtra {
-            MenuBarContent()
+            MenuBarPanelView()
                 .environment(appState)
         } label: {
-            Label("Second Brain", systemImage: "brain.head.profile")
+            MenuBarLabel(appState: appState)
         }
+        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
                 .environment(appState)
         }
-    }
-}
-
-private struct MenuBarContent: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Open Second Brain") {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        SettingsLink {
-            Text("Settings…")
-        }
-
-        Divider()
-
-        Button("Quit Second Brain") {
-            NSApp.terminate(nil)
-        }
-        .keyboardShortcut("q")
     }
 }

@@ -360,6 +360,66 @@ final class SearchModelTests: XCTestCase {
         )
     }
 
+    func testOpenRecordLoadsADetailWithoutAQuery() async throws {
+        let card = SearchFixtures.card(id: 9, title: "Menu record", projectKey: "jarvis")
+        StubURLProtocol.setHandler { request in
+            switch request.url?.path {
+            case "/api/v1/records/9":
+                return .init(
+                    body: try SearchFixtures.recordData(card: card, rawText: "raw menu text")
+                )
+            case "/api/v1/projects":
+                return .init(body: try SearchFixtures.projectsData([]))
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+
+        let model = SearchModel(client: client(), debounce: .zero)
+        model.openRecord(id: 9)
+        try await waitUntil { model.detail != nil }
+
+        XCTAssertEqual(model.selectedID, 9)
+        XCTAssertEqual(model.detail?.card.title, "Menu record")
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertNil(model.detailError)
+
+        // The search view calls setClient again in onAppear; an identical
+        // configuration must not wipe a record opened from the menu bar.
+        model.setClient(client())
+        XCTAssertEqual(model.selectedID, 9)
+        XCTAssertEqual(model.detail?.card.id, 9)
+    }
+
+    func testOpenRecordReloadsAnAlreadySelectedRecord() async throws {
+        let card = SearchFixtures.card(id: 9, title: "Menu record")
+        let requests = LockedCounter()
+        StubURLProtocol.setHandler { request in
+            switch request.url?.path {
+            case "/api/v1/records/9":
+                _ = requests.next()
+                return .init(
+                    body: try SearchFixtures.recordData(card: card, rawText: "raw menu text")
+                )
+            case "/api/v1/projects":
+                return .init(body: try SearchFixtures.projectsData([]))
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+
+        let model = SearchModel(client: client(), debounce: .zero)
+        model.openRecord(id: 9)
+        try await waitUntil { model.detail != nil }
+        let firstCount = requests.value
+
+        model.openRecord(id: 9)
+        try await waitUntil { requests.value > firstCount }
+
+        XCTAssertEqual(model.selectedID, 9)
+        XCTAssertEqual(model.detail?.card.title, "Menu record")
+    }
+
     private func client() -> APIClient {
         APIClient(
             baseURL: baseURL,
@@ -372,13 +432,19 @@ final class SearchModelTests: XCTestCase {
 
 private final class LockedCounter: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = 0
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 
     func next() -> Int {
         lock.lock()
         defer { lock.unlock() }
-        value += 1
-        return value
+        count += 1
+        return count
     }
 }
 

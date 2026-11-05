@@ -8,18 +8,16 @@ struct UploadQueueSidebarView: View {
 
     private var status: UploadStatus { appState.uploadStatus }
 
-    private var needsAuthentication: Bool {
-        appState.requiresReauthentication
-            || status.requiresAuthentication
-            || status.missingToken
+    private var queue: UploadQueuePresentation {
+        UploadQueuePresentation(
+            status: appState.uploadStatus,
+            requiresReauthentication: appState.requiresReauthentication
+        )
     }
 
-    private var stateTitle: String {
-        if appState.requiresReauthentication || status.requiresAuthentication {
-            return "Нужен новый токен"
-        }
-        return status.stateTitle
-    }
+    private var needsAuthentication: Bool { queue.needsAuthentication }
+
+    private var stateTitle: String { queue.title }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -129,18 +127,7 @@ struct UploadQueueSidebarView: View {
         .accessibilityIdentifier("upload.panel")
     }
 
-    private var stateColor: Color {
-        if needsAuthentication || status.failed > 0 || status.lastError != nil {
-            return .red
-        }
-        if status.isUploading {
-            return .accentColor
-        }
-        if status.pending > 0 || status.nextRetryAt != nil {
-            return .orange
-        }
-        return .secondary
-    }
+    private var stateColor: Color { queue.tint }
 
     private func counter(
         _ title: String,

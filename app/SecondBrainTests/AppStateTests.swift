@@ -31,6 +31,17 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.connection, .unknown)
     }
 
+    func testOpenRecordSelectsSearchAndIsConsumedOnce() {
+        let state = AppState()
+
+        state.selectedSection = .dashboard
+        state.openRecord(42)
+
+        XCTAssertEqual(state.selectedSection, .search)
+        XCTAssertEqual(state.consumePendingRecord(), 42)
+        XCTAssertNil(state.consumePendingRecord())
+    }
+
     func testSuccessfulHealthCheckUpdatesObservableState() async {
         StubURLProtocol.setHandler { _ in .init(body: Data(Fixtures.healthJSON.utf8)) }
         let state = AppState()
