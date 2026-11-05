@@ -117,7 +117,6 @@ struct SettingsView: View {
 
             Section("Tokens") {
                 tokenRow("OpenCode", account: KeychainStore.Account.opencode)
-                tokenRow("Jarvis", account: KeychainStore.Account.jarvis)
                 tokenRow("Second Brain app", account: KeychainStore.Account.ui)
 
                 Button("Повернуть токены…") {

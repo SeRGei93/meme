@@ -61,7 +61,7 @@ final class SearchModelTests: XCTestCase {
         let model = SearchModel(client: client(), debounce: .seconds(60))
         defer { model.cancelPendingRequests() }
         model.projectKey = "github.com/example/repo"
-        model.source = .opencode
+        model.source = "opencode"
         model.dateRange = .week
         model.query = "  sqlite migration  "
 
@@ -323,7 +323,7 @@ final class SearchModelTests: XCTestCase {
         model.query = "query"
         await model.searchNow()
 
-        model.source = .jarvis
+        model.source = "jarvis"
         model.projectKey = "jarvis"
         model.dateRange = .month
         XCTAssertTrue(model.hasActiveFilters)
@@ -418,6 +418,31 @@ final class SearchModelTests: XCTestCase {
 
         XCTAssertEqual(model.selectedID, 9)
         XCTAssertEqual(model.detail?.card.title, "Menu record")
+    }
+
+    func testRefreshSourcesBuildsOptionsFromStats() async throws {
+        StubURLProtocol.setHandler { request in
+            switch request.url?.path {
+            case "/api/v1/stats":
+                return .init(body: StatusFixtures.statsData(
+                    sources: ["opencode": 2, "claude-prod": 3]
+                ))
+            default:
+                return .init(status: 404, body: Data())
+            }
+        }
+
+        let model = SearchModel(client: client(), debounce: .zero)
+        defer { model.cancelPendingRequests() }
+        model.refreshSources()
+        try await waitUntil { model.sourceCounts.count == 2 }
+
+        XCTAssertEqual(model.sourceOptions.map(\.source), ["claude-prod", "opencode"])
+        XCTAssertEqual(model.sourceOptions.first(where: { $0.source == "claude-prod" })?.count, 3)
+
+        model.source = "cursor"
+        XCTAssertTrue(model.sourceOptions.contains { $0.source == "cursor" })
+        XCTAssertEqual(model.sourceOptions.first(where: { $0.source == "cursor" })?.count, 0)
     }
 
     private func client() -> APIClient {

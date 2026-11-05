@@ -95,7 +95,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Память пока пуста")
                     .font(.headline)
-                Text("Подключите OpenCode или Jarvis — записи появятся здесь после первой синхронизации.")
+                Text("Подключите агента с токеном — записи появятся здесь после первой синхронизации.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

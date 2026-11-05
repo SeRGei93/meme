@@ -48,7 +48,7 @@ struct AppSidebarView: View {
                 Text("Second Brain")
                     .font(.title3.bold())
                     .lineLimit(1)
-                Text("Память для OpenCode и Jarvis")
+                Text("Память для агентов с токеном")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

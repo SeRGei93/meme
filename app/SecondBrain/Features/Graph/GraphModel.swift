@@ -30,10 +30,9 @@ struct GraphVisualEdge: Identifiable, Equatable, Sendable {
 
 /// State for the graph screen.
 ///
-/// The graph is fetched once per project filter (source filtering is local,
-/// because every node carries its source). Layout runs on a detached task and
-/// the canvas only redraws when positions arrive, so a 400-node graph never
-/// blocks the main actor.
+/// The graph is fetched once per project/source filter; both filters go to the
+/// server. Layout runs on a detached task and the canvas only redraws when
+/// positions arrive, so a 400-node graph never blocks the main actor.
 @MainActor
 @Observable
 final class GraphModel {
@@ -43,11 +42,13 @@ final class GraphModel {
 
     private(set) var graph: MemoryGraph?
     private(set) var projects: [Project] = []
+    private(set) var sourceCounts: [String: Int] = [:]
     private(set) var positions: [Int64: GraphPoint] = [:]
     private(set) var isLoading = false
     private(set) var isLayouting = false
     private(set) var error: String?
     private(set) var projectsError: String?
+    private(set) var sourcesError: String?
     private(set) var detail: Record?
     private(set) var detailLoading = false
     private(set) var detailError: String?
@@ -55,8 +56,8 @@ final class GraphModel {
 
     /// Server-side project filter. Changing it requires a reload.
     var projectKey: String?
-    /// Local source filter.
-    var source: MemorySource?
+    /// Server-side source filter. Changing it requires a reload.
+    var source: String?
     var isDetailPresented = false
 
     private var client: APIClient?
@@ -70,16 +71,18 @@ final class GraphModel {
     // MARK: - Derived state
 
     var nodes: [GraphNode] {
-        let all = graph?.nodes ?? []
-        guard let source else { return all }
-        return all.filter { $0.source == source.rawValue }
+        graph?.nodes ?? []
     }
 
     var edges: [GraphEdge] {
-        let ids = Set(nodes.map(\.id))
-        return (graph?.edges ?? []).filter {
-            ids.contains($0.fromID) && ids.contains($0.toID)
-        }
+        graph?.edges ?? []
+    }
+
+    /// Sources and global record counts from `stats.by_source`, not from the
+    /// filtered graph page. The current selection stays visible even when the
+    /// server no longer reports it.
+    var sourceOptions: [SourceOption] {
+        SourceOption.options(from: sourceCounts, including: source)
     }
 
     var visualNodes: [GraphVisualNode] {
@@ -136,9 +139,9 @@ final class GraphModel {
         projects.first { $0.key == projectKey }
     }
 
-    func count(for source: MemorySource?) -> Int {
-        guard let source else { return graph?.nodes.count ?? 0 }
-        return (graph?.nodes ?? []).filter { $0.source == source.rawValue }.count
+    func count(for source: String?) -> Int {
+        guard let source else { return sourceCounts.values.reduce(0, +) }
+        return sourceCounts[source] ?? 0
     }
 
     // MARK: - Lifecycle
@@ -153,11 +156,13 @@ final class GraphModel {
         generation &+= 1
         graph = nil
         projects = []
+        sourceCounts = [:]
         positions = [:]
         isLoading = false
         isLayouting = false
         error = nil
         projectsError = nil
+        sourcesError = nil
         clearSelection()
     }
 
@@ -177,13 +182,22 @@ final class GraphModel {
         isLoading = true
         error = nil
         projectsError = nil
+        sourcesError = nil
 
         let projectsTask = Task { try await client.projects() }
-        defer { projectsTask.cancel() }
+        let statsTask = Task { try await client.stats() }
+        defer {
+            projectsTask.cancel()
+            statsTask.cancel()
+        }
 
         let result: MemoryGraph
         do {
-            result = try await client.graph(projectKey: projectKey, limit: Self.nodeLimit)
+            result = try await client.graph(
+                projectKey: projectKey,
+                source: source,
+                limit: Self.nodeLimit
+            )
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
             graph = nil
@@ -210,6 +224,16 @@ final class GraphModel {
         } catch {
             guard generation == self.generation, !Task.isCancelled else { return }
             projectsError = ErrorDisplay.message(for: error)
+        }
+
+        do {
+            let stats = try await statsTask.value
+            guard generation == self.generation, !Task.isCancelled else { return }
+            sourceCounts = stats.records.bySource
+            sourcesError = nil
+        } catch {
+            guard generation == self.generation, !Task.isCancelled else { return }
+            sourcesError = ErrorDisplay.message(for: error)
         }
     }
 

@@ -19,7 +19,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(appState.isConfigured ? "Обновить подключение" : "Подключение к Second Brain")
                     .font(.title2.bold())
-                Text("Укажите адрес сервера и bootstrap admin token. Приложение создаст три клиента: opencode, jarvis и ui.")
+                Text("Укажите адрес сервера и bootstrap admin token. Приложение создаст два клиента: локальный OpenCode и само приложение.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -6,8 +6,9 @@ import { createSpoolValidators, formatAjvErrors } from './lib/spool-schema.mjs';
 
 const ALL_SCOPES = ['ingest', 'mcp:read', 'mcp:write', 'ui', 'admin'];
 const SCOPES = new Set(ALL_SCOPES);
-const CLIENT_KINDS = new Set(['opencode', 'jarvis', 'ui', 'admin']);
-const SOURCES = new Set(['opencode', 'jarvis']);
+const CLIENT_KINDS = new Set(['agent', 'opencode', 'jarvis', 'ui', 'admin']);
+const STORED_KINDS = new Set(['agent', 'ui', 'admin']);
+const LEGACY_AGENT_KINDS = new Set(['opencode', 'jarvis']);
 const JOB_STATUSES = new Set(['queued', 'running', 'done', 'failed']);
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
@@ -38,8 +39,18 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-function sourceForKind(kind) {
-  return kind === 'opencode' || kind === 'jarvis' ? kind : null;
+function normalizeKind(kind) {
+  return LEGACY_AGENT_KINDS.has(kind) ? 'agent' : kind;
+}
+
+function deriveSource(name) {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .replace(/-+$/g, '');
+  return slug || 'agent';
 }
 
 function isPlainObject(value) {
@@ -107,11 +118,11 @@ function validateMemory(body) {
   parseDate(body.occurred_at, 'occurred_at');
 }
 
-function validateClientRequest(body) {
+function normalizeClientRequest(body) {
   if (!isPlainObject(body)) {
     throw new ApiError(422, 'validation_failed', 'Body must be a JSON object.');
   }
-  const allowed = new Set(['name', 'kind', 'scopes']);
+  const allowed = new Set(['name', 'kind', 'source', 'scopes']);
   for (const key of Object.keys(body)) {
     if (!allowed.has(key)) {
       throw new ApiError(422, 'validation_failed', `${key} is not an allowed field.`, { field: key });
@@ -128,6 +139,22 @@ function validateClientRequest(body) {
       field: 'kind',
     });
   }
+  const kind = normalizeKind(body.kind);
+  let source = body.source === '' ? null : (body.source ?? null);
+  if (kind === 'agent') {
+    source = source ?? deriveSource(body.name);
+    if (typeof source !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(source)) {
+      throw new ApiError(422, 'validation_failed', 'source must be a lowercase slug of 1..64 characters.', {
+        field: 'source',
+      });
+    }
+  } else if (source !== null && source !== '') {
+    throw new ApiError(422, 'validation_failed', `source must be null for kind ${kind}.`, {
+      field: 'source',
+    });
+  } else {
+    source = null;
+  }
   if (
     !Array.isArray(body.scopes) ||
     body.scopes.length < 1 ||
@@ -139,6 +166,8 @@ function validateClientRequest(body) {
       field: 'scopes',
     });
   }
+
+  return { name: body.name, kind, source, scopes: [...body.scopes] };
 }
 
 function cardFields(record) {
@@ -443,9 +472,9 @@ export async function startMockApi({
       .at(0) ?? null;
 
   const ingest = (principal, body, request) => {
-    if (principal.kind !== 'opencode') {
-      throw new ApiError(403, 'forbidden', 'Only opencode clients may ingest session bundles.', {
-        required_kind: 'opencode',
+    if (!principal.source) {
+      throw new ApiError(403, 'forbidden', 'This client has no knowledge source.', {
+        required_kind: 'agent',
       });
     }
     if (!validateIngest(body)) {
@@ -465,7 +494,7 @@ export async function startMockApi({
 
     return withIdempotency(principal, 'ingest', idempotencyKey, body, () => {
       const timestamp = now();
-      const key = `${principal.id}:opencode:${body.external_id}`;
+      const key = `${principal.id}:${principal.source}:${body.external_id}`;
       const existing = recordsByKey.get(key);
       const rawText = rawTextFromMessages(body.messages);
       const contentHash = sha256(
@@ -557,7 +586,7 @@ export async function startMockApi({
   const createMemory = (principal, body, request) => {
     if (!principal.source) {
       throw new ApiError(403, 'forbidden', 'This client kind cannot write memories.', {
-        required_source: [...SOURCES],
+        required_kind: 'agent',
       });
     }
     validateMemory(body);
@@ -649,9 +678,10 @@ export async function startMockApi({
     }
     const limit = parseLimit(url, { defaultValue: 8, min: 1, max: 50 });
     const projectKey = url.searchParams.get('project_key');
-    const source = url.searchParams.get('source');
-    if (source !== null && !SOURCES.has(source)) {
-      throw new ApiError(400, 'invalid_request', 'source must be opencode or jarvis.', {
+    const rawSource = url.searchParams.get('source');
+    const source = rawSource === null ? null : rawSource.trim();
+    if (source !== null && (source.length < 1 || source.length > 100)) {
+      throw new ApiError(400, 'invalid_request', 'source must be 1..100 characters.', {
         field: 'source',
       });
     }
@@ -735,6 +765,13 @@ export async function startMockApi({
   const graph = (url) => {
     const limit = parseLimit(url, { defaultValue: 100, min: 1, max: 500 });
     const projectKey = url.searchParams.get('project_key');
+    const rawSource = url.searchParams.get('source');
+    const source = rawSource === null ? null : rawSource.trim();
+    if (source !== null && (source.length < 1 || source.length > 100)) {
+      throw new ApiError(400, 'invalid_request', 'source must be 1..100 characters.', {
+        field: 'source',
+      });
+    }
     const rawMinWeight = url.searchParams.get('min_weight');
     const minWeight = rawMinWeight === null ? 0 : Number(rawMinWeight);
     if (!Number.isFinite(minWeight) || minWeight < 0 || minWeight > 1) {
@@ -745,6 +782,7 @@ export async function startMockApi({
 
     const eligible = records
       .filter((record) => !projectKey || record.project_key === projectKey)
+      .filter((record) => !source || record.source === source)
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
     const included = eligible.slice(0, limit);
     const nodes = included.map((record) => ({
@@ -806,10 +844,7 @@ export async function startMockApi({
           total: records.length,
           final: records.filter((record) => record.is_final).length,
           draft: records.filter((record) => !record.is_final).length,
-          by_source: {
-            opencode: sourceCounts.opencode ?? 0,
-            jarvis: sourceCounts.jarvis ?? 0,
-          },
+          by_source: sourceCounts,
           by_card_status: {
             heuristic: cardCounts.heuristic ?? 0,
             queued: cardCounts.queued ?? 0,
@@ -828,7 +863,7 @@ export async function startMockApi({
         last_ingest_at: lastIngest,
         database: {
           status: 'ok',
-          schema_version: 1,
+          schema_version: 4,
           size_bytes: Buffer.byteLength(JSON.stringify(records)),
         },
       },
@@ -879,21 +914,29 @@ export async function startMockApi({
   });
 
   const createClient = (body) => {
-    validateClientRequest(body);
-    if (clients.some((client) => !client.revoked_at && client.name === body.name)) {
+    const spec = normalizeClientRequest(body);
+    if (clients.some((client) => !client.revoked_at && client.name === spec.name)) {
       throw new ApiError(409, 'conflict', 'An active client with this name already exists.', {
         field: 'name',
       });
     }
+    if (
+      spec.source !== null &&
+      clients.some((client) => !client.revoked_at && client.source === spec.source)
+    ) {
+      throw new ApiError(409, 'conflict', 'An active client with this source already exists.', {
+        field: 'source',
+      });
+    }
 
     const timestamp = now();
-    const token = `sb_${body.kind}_${randomBytes(32).toString('base64url')}`;
+    const token = `sb_${spec.kind}_${randomBytes(32).toString('base64url')}`;
     const client = {
       id: nextId('client'),
-      name: body.name,
-      kind: body.kind,
-      scopes: [...body.scopes],
-      source: sourceForKind(body.kind),
+      name: spec.name,
+      kind: spec.kind,
+      scopes: spec.scopes,
+      source: spec.source,
       created_at: timestamp,
       last_seen_at: null,
       revoked_at: null,
@@ -925,7 +968,7 @@ export async function startMockApi({
         body: {
           status: 'ok',
           version: 'mock-1.0.0',
-          schema_version: 1,
+          schema_version: 4,
           time: now(),
           database: { status: 'ok', fts5: true },
         },

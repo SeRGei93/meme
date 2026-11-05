@@ -1,20 +1,6 @@
 import Foundation
 import Observation
 
-enum MemorySource: String, CaseIterable, Identifiable, Sendable {
-    case opencode
-    case jarvis
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .opencode: return "OpenCode"
-        case .jarvis: return "Jarvis"
-        }
-    }
-}
-
 enum SearchDateRange: String, CaseIterable, Identifiable, Sendable {
     case any
     case today
@@ -59,7 +45,7 @@ final class SearchModel {
     struct Criteria: Equatable, Sendable {
         let query: String
         let projectKey: String?
-        let source: MemorySource?
+        let source: String?
         let dateRange: SearchDateRange
     }
 
@@ -77,7 +63,7 @@ final class SearchModel {
         }
     }
 
-    var source: MemorySource? {
+    var source: String? {
         didSet {
             guard source != oldValue else { return }
             scheduleSearch()
@@ -103,6 +89,7 @@ final class SearchModel {
     private(set) var isLoading = false
     private(set) var error: String?
     private(set) var projects: [Project] = []
+    private(set) var sourceCounts: [String: Int] = [:]
     private(set) var detail: Record?
     private(set) var detailLoading = false
     private(set) var detailError: String?
@@ -114,6 +101,9 @@ final class SearchModel {
     private var projectsLoading = false
     private var projectsLoaded = false
     private var projectsGeneration = 0
+    private var sourcesTask: Task<Void, Never>?
+    private var sourcesLoading = false
+    private var sourcesGeneration = 0
     private let debounce: Duration
     private let now: () -> Date
     private let calendar: Calendar
@@ -162,6 +152,11 @@ final class SearchModel {
         return projects.first { $0.key == projectKey }
     }
 
+    /// Sources and global record counts for the filter.
+    var sourceOptions: [SourceOption] {
+        SourceOption.options(from: sourceCounts, including: source)
+    }
+
     func setClient(_ client: APIClient?) {
         guard self.client?.configuration != client?.configuration else { return }
         self.client = client
@@ -172,6 +167,11 @@ final class SearchModel {
             projectsLoaded = false
             projectsGeneration &+= 1
             projects = []
+            sourcesTask?.cancel()
+            sourcesTask = nil
+            sourcesLoading = false
+            sourceCounts = [:]
+            sourcesGeneration &+= 1
             results = []
             total = 0
             selectedID = nil
@@ -194,6 +194,7 @@ final class SearchModel {
         projectsLoaded = false
         projectsGeneration &+= 1
         loadProjects()
+        refreshSources()
         if !isIdle {
             scheduleSearch(immediate: false)
         }
@@ -204,6 +205,37 @@ final class SearchModel {
     func ensureProjectsLoaded() {
         guard !projectsLoaded, !projectsLoading else { return }
         loadProjects()
+    }
+
+    /// Seeds the filter from the stats AppState already loaded, so the picker is
+    /// usable immediately; `refreshSources` then gets the latest counts.
+    func setSourceCounts(_ counts: [String: Int]) {
+        sourceCounts = counts
+    }
+
+    /// Refreshes the source filter. Called every time the search screen appears:
+    /// an agent can start writing under a new source without a restart.
+    func refreshSources() {
+        guard let client, !sourcesLoading else { return }
+        sourcesLoading = true
+        sourcesGeneration &+= 1
+        let generation = sourcesGeneration
+        sourcesTask?.cancel()
+        sourcesTask = Task { [weak self] in
+            defer {
+                if self?.sourcesGeneration == generation {
+                    self?.sourcesLoading = false
+                }
+            }
+            do {
+                let stats = try await client.stats()
+                guard !Task.isCancelled, self?.sourcesGeneration == generation else { return }
+                self?.sourceCounts = stats.records.bySource
+            } catch {
+                guard !Task.isCancelled, self?.sourcesGeneration == generation else { return }
+                // Keep the last known list; the search itself still works.
+            }
+        }
     }
 
     /// Runs the current query immediately, bypassing the debounce. Used by
@@ -255,10 +287,13 @@ final class SearchModel {
         searchTask?.cancel()
         detailTask?.cancel()
         projectsTask?.cancel()
+        sourcesTask?.cancel()
         searchTask = nil
         detailTask = nil
         projectsTask = nil
+        sourcesTask = nil
         projectsLoading = false
+        sourcesLoading = false
         isLoading = false
         detailLoading = false
     }
@@ -329,7 +364,7 @@ final class SearchModel {
                 query: criteria.query,
                 limit: limit,
                 projectKey: criteria.projectKey,
-                source: criteria.source?.rawValue,
+                source: criteria.source,
                 since: since
             )
             guard !Task.isCancelled, criteria == currentCriteria else { return }

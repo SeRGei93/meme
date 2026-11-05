@@ -99,7 +99,7 @@ struct ProjectsView: View {
             messagePane(
                 systemImage: "folder",
                 title: "Проектов пока нет",
-                message: "Проекты появляются после первой записи из OpenCode или Jarvis.",
+                message: "Проекты появляются после первой записи от агента.",
                 identifier: "projects.empty"
             )
         } else if model.filteredProjects.isEmpty {

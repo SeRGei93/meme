@@ -92,9 +92,9 @@ final class SecondBrainUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["dashboard.recordsTotal"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["dashboard.recordsTotal"].value as? String, "3")
-        XCTAssertEqual(app.staticTexts["dashboard.projectsTotal"].value as? String, "2")
-        XCTAssertEqual(app.staticTexts["dashboard.clientsTotal"].value as? String, "1")
+        XCTAssertEqual(app.staticTexts["dashboard.recordsTotal"].value as? String, "4")
+        XCTAssertEqual(app.staticTexts["dashboard.projectsTotal"].value as? String, "3")
+        XCTAssertEqual(app.staticTexts["dashboard.clientsTotal"].value as? String, "4")
         XCTAssertTrue(app.staticTexts["dashboard.lastIngest"].waitForExistence(timeout: 5))
 
         let failedJob = element("dashboard.failedJob.10", in: app)
@@ -133,7 +133,20 @@ final class SecondBrainUITests: XCTestCase {
     }
 
     func testAgentsShowOpenCodeAndJarvisStatus() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("second-brain-ui-agents-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = root.appendingPathComponent("second-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        let config: [String: Any] = [
+            "server_url": "https://ui.test",
+            "app_clients": ["opencode": ["id": 2, "name": "opencode-macbook"]],
+        ]
+        try JSONSerialization.data(withJSONObject: config)
+            .write(to: configDirectory.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
         let app = configuredApp(
+            configDirectory: configDirectory,
             uiToken: "sb_ui_test",
             mockAPI: true,
             uiSection: "agents",
@@ -141,25 +154,32 @@ final class SecondBrainUITests: XCTestCase {
         )
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["agents.opencode.lastCapture"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.staticTexts["agents.jarvis.lastMemory"].exists)
+        XCTAssertTrue(app.staticTexts["agents.source.opencode.lastActivity"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["agents.source.jarvis.lastActivity"].exists)
+        XCTAssertTrue(app.staticTexts["agents.source.claude-prod.lastActivity"].exists)
         XCTAssertEqual(
-            app.staticTexts["agents.opencode.records"].value as? String,
+            app.staticTexts["agents.source.opencode.records"].value as? String,
             "2"
         )
         XCTAssertEqual(
-            app.staticTexts["agents.jarvis.records"].value as? String,
+            app.staticTexts["agents.source.jarvis.records"].value as? String,
+            "1"
+        )
+        XCTAssertEqual(
+            app.staticTexts["agents.source.claude-prod.records"].value as? String,
             "1"
         )
         XCTAssertTrue(
-            (app.staticTexts["agents.opencode.token"].value as? String)?
+            (app.staticTexts["agents.source.opencode.token"].value as? String)?
                 .contains("opencode-macbook") == true,
             "token status should name the active OpenCode client"
         )
         XCTAssertTrue(
-            (app.staticTexts["agents.jarvis.token"].value as? String)?
+            (app.staticTexts["agents.source.jarvis.token"].value as? String)?
                 .contains("jarvis") == true
         )
+        XCTAssertTrue(app.staticTexts["agents.source.opencode.plugin"].exists)
+        XCTAssertFalse(app.staticTexts["agents.source.jarvis.plugin"].exists)
         XCTAssertTrue(app.staticTexts["agents.queue.failed"].exists)
     }
 
@@ -179,8 +199,15 @@ final class SecondBrainUITests: XCTestCase {
         let sourceFilter = element("graph.sourceFilter", in: app)
         XCTAssertTrue(sourceFilter.waitForExistence(timeout: 5))
         sourceFilter.click()
+        XCTAssertTrue(
+            app.descendants(matching: .menuItem)
+                .matching(NSPredicate(format: "title == %@", "claude-prod · 1"))
+                .firstMatch
+                .waitForExistence(timeout: 5),
+            "the dynamic filter must include sources from stats"
+        )
         let jarvis = app.descendants(matching: .menuItem)
-            .matching(NSPredicate(format: "title == %@", "Jarvis"))
+            .matching(NSPredicate(format: "title BEGINSWITH %@", "Jarvis"))
             .firstMatch
         XCTAssertTrue(jarvis.waitForExistence(timeout: 5))
         jarvis.click()
@@ -357,8 +384,15 @@ final class SecondBrainUITests: XCTestCase {
         let sourceFilter = element("search.sourceFilter", in: app)
         XCTAssertTrue(sourceFilter.exists)
         sourceFilter.click()
+        XCTAssertTrue(
+            app.descendants(matching: .menuItem)
+                .matching(NSPredicate(format: "title == %@", "claude-prod · 1"))
+                .firstMatch
+                .waitForExistence(timeout: 5),
+            "the dynamic filter must include sources from stats"
+        )
         let jarvis = app.descendants(matching: .menuItem)
-            .matching(NSPredicate(format: "title == %@", "Jarvis"))
+            .matching(NSPredicate(format: "title BEGINSWITH %@", "Jarvis"))
             .firstMatch
         XCTAssertTrue(jarvis.waitForExistence(timeout: 5))
         jarvis.click()

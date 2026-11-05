@@ -86,12 +86,16 @@ struct APIClient: Sendable {
     /// database; `minWeight` drops weak links.
     func graph(
         projectKey: String? = nil,
+        source: String? = nil,
         limit: Int? = nil,
         minWeight: Double? = nil
     ) async throws -> MemoryGraph {
         var items: [URLQueryItem] = []
         if let projectKey, !projectKey.isEmpty {
             items.append(URLQueryItem(name: "project_key", value: projectKey))
+        }
+        if let source, !source.isEmpty {
+            items.append(URLQueryItem(name: "source", value: source))
         }
         if let limit {
             items.append(URLQueryItem(name: "limit", value: String(limit)))

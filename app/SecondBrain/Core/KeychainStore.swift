@@ -23,9 +23,11 @@ struct KeychainStore: Sendable {
     /// Token roles shared by onboarding, the upload queue and Settings.
     enum Account {
         static let opencode = "opencode"
-        static let jarvis = "jarvis"
         static let ui = "ui"
-        static let all = [opencode, jarvis, ui]
+        /// Token created by older versions for the server-side Jarvis. It is
+        /// deleted on the next successful onboarding and never recreated.
+        static let legacyJarvis = "jarvis"
+        static let all = [opencode, ui]
     }
 
     static let defaultService = "com.serg.secondbrain"

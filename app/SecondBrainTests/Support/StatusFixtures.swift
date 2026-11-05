@@ -5,8 +5,7 @@ enum StatusFixtures {
         recordsTotal: Int = 7,
         final: Int = 6,
         draft: Int = 1,
-        opencode: Int = 5,
-        jarvis: Int = 2,
+        sources: [String: Int] = ["opencode": 5, "jarvis": 2],
         projects: Int = 3,
         clients: Int = 2,
         queued: Int = 1,
@@ -20,7 +19,7 @@ enum StatusFixtures {
                 "total": recordsTotal,
                 "final": final,
                 "draft": draft,
-                "by_source": ["opencode": opencode, "jarvis": jarvis],
+                "by_source": sources,
                 "by_card_status": [
                     "heuristic": 0,
                     "queued": queued,
@@ -38,7 +37,7 @@ enum StatusFixtures {
             ],
             "database": [
                 "status": "ok",
-                "schema_version": 3,
+                "schema_version": 4,
                 "size_bytes": 4096,
             ],
         ]
@@ -90,6 +89,7 @@ enum StatusFixtures {
         id: Int64,
         name: String,
         kind: String,
+        source: String? = nil,
         revokedAt: String? = nil,
         lastSeenAt: String? = nil
     ) -> [String: Any] {
@@ -100,7 +100,7 @@ enum StatusFixtures {
             "scopes": [],
             "created_at": "2026-10-01T12:00:00Z",
         ]
-        object["source"] = kind == "opencode" || kind == "jarvis" ? kind : NSNull()
+        object["source"] = source ?? (kind == "opencode" || kind == "jarvis" ? kind : nil)
         object["last_seen_at"] = lastSeenAt
         object["revoked_at"] = revokedAt
         return object

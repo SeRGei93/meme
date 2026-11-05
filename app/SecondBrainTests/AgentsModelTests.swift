@@ -16,11 +16,13 @@ final class AgentsModelTests: XCTestCase {
         super.tearDown()
     }
 
-    func testLoadResolvesLatestJobAndActiveClientsPerKind() async throws {
+    func testLoadAggregatesClientsJobsAndCountsPerSource() async throws {
         StubURLProtocol.setHandler { request in
             switch request.url?.path {
             case "/api/v1/stats":
-                return .init(body: StatusFixtures.statsData(opencode: 5, jarvis: 2))
+                return .init(body: StatusFixtures.statsData(
+                    sources: ["opencode": 5, "jarvis": 2, "claude-prod": 3]
+                ))
             case "/api/v1/jobs":
                 return .init(
                     body: StatusFixtures.jobsData([
@@ -46,15 +48,24 @@ final class AgentsModelTests: XCTestCase {
                             error: nil,
                             createdAt: "2026-11-05T09:00:00Z"
                         ),
+                        StatusFixtures.job(
+                            id: 4,
+                            clientID: 5,
+                            kind: "memory",
+                            externalID: "claude_note",
+                            error: nil,
+                            createdAt: "2026-11-05T11:00:00Z"
+                        ),
                     ])
                 )
             case "/api/v1/clients":
                 return .init(
                     body: StatusFixtures.clientsData([
                         StatusFixtures.client(id: 1, name: "second-brain-app", kind: "ui"),
-                        StatusFixtures.client(id: 2, name: "opencode-macbook", kind: "opencode"),
-                        StatusFixtures.client(id: 4, name: "opencode-old", kind: "opencode", revokedAt: "2026-11-01T00:00:00Z"),
-                        StatusFixtures.client(id: 3, name: "jarvis", kind: "jarvis"),
+                        StatusFixtures.client(id: 2, name: "opencode-macbook", kind: "agent", source: "opencode"),
+                        StatusFixtures.client(id: 4, name: "opencode-old", kind: "agent", source: "opencode", revokedAt: "2026-11-01T00:00:00Z"),
+                        StatusFixtures.client(id: 3, name: "jarvis", kind: "agent", source: "jarvis"),
+                        StatusFixtures.client(id: 5, name: "claude", kind: "agent", source: "claude-prod"),
                     ])
                 )
             default:
@@ -63,29 +74,42 @@ final class AgentsModelTests: XCTestCase {
         }
 
         let model = AgentsModel(client: client())
+        model.localOpenCodeClient = StoredClient(id: 2, name: "opencode-macbook")
         await model.load()
 
-        XCTAssertEqual(model.opencode?.recordCount, 5)
-        XCTAssertEqual(model.opencode?.lastExternalID, "ses_old")
-        XCTAssertEqual(model.opencode?.activeClientNames, ["opencode-macbook"])
-        XCTAssertEqual(model.opencode?.revokedClientCount, 1)
-        XCTAssertEqual(model.jarvis?.recordCount, 2)
-        XCTAssertEqual(model.jarvis?.lastExternalID, "mem_1")
-        XCTAssertEqual(model.jarvis?.activeClientNames, ["jarvis"])
+        XCTAssertEqual(model.summaries.count, 3)
+        let opencode = try XCTUnwrap(summary("opencode", in: model))
+        XCTAssertEqual(opencode.recordCount, 5)
+        XCTAssertEqual(opencode.lastExternalID, "ses_old")
+        XCTAssertEqual(opencode.activeClientNames, ["opencode-macbook"])
+        XCTAssertEqual(opencode.revokedClientCount, 1)
+        XCTAssertTrue(opencode.isLocalOpenCode)
+
+        let jarvis = try XCTUnwrap(summary("jarvis", in: model))
+        XCTAssertEqual(jarvis.recordCount, 2)
+        XCTAssertEqual(jarvis.lastExternalID, "mem_1")
+        XCTAssertEqual(jarvis.activeClientNames, ["jarvis"])
+        XCTAssertFalse(jarvis.isLocalOpenCode)
+
+        let claude = try XCTUnwrap(summary("claude-prod", in: model))
+        XCTAssertEqual(claude.recordCount, 3)
+        XCTAssertEqual(claude.lastExternalID, "claude_note")
+        XCTAssertEqual(claude.activeClientNames, ["claude"])
+
         XCTAssertEqual(model.queue?.queued, 1)
         XCTAssertNil(model.error)
         XCTAssertNil(model.jobsError)
         XCTAssertNil(model.clientsError)
     }
 
-    func testJobsPaginationFindsASecondKindBeyondTheFirstPage() async throws {
+    func testJobsPaginationFindsASecondSourceBeyondTheFirstPage() async throws {
         StubURLProtocol.setHandler { request in
             let components = try XCTUnwrap(
                 URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
             )
             switch components.path {
             case "/api/v1/stats":
-                return .init(body: StatusFixtures.statsData(opencode: 1, jarvis: 1))
+                return .init(body: StatusFixtures.statsData(sources: ["opencode": 1, "jarvis": 1]))
             case "/api/v1/jobs":
                 let cursor = components.queryItems?.first { $0.name == "cursor" }?.value
                 if cursor == "page2" {
@@ -121,8 +145,8 @@ final class AgentsModelTests: XCTestCase {
             default:
                 return .init(
                     body: StatusFixtures.clientsData([
-                        StatusFixtures.client(id: 2, name: "opencode-macbook", kind: "opencode"),
-                        StatusFixtures.client(id: 3, name: "jarvis", kind: "jarvis"),
+                        StatusFixtures.client(id: 2, name: "opencode-macbook", kind: "agent", source: "opencode"),
+                        StatusFixtures.client(id: 3, name: "jarvis", kind: "agent", source: "jarvis"),
                     ])
                 )
             }
@@ -131,15 +155,15 @@ final class AgentsModelTests: XCTestCase {
         let model = AgentsModel(client: client())
         await model.load()
 
-        XCTAssertEqual(model.opencode?.lastExternalID, "ses_new")
-        XCTAssertEqual(model.jarvis?.lastExternalID, "mem_deep")
+        XCTAssertEqual(summary("opencode", in: model)?.lastExternalID, "ses_new")
+        XCTAssertEqual(summary("jarvis", in: model)?.lastExternalID, "mem_deep")
     }
 
     func testClientsFailureStillShowsRecordCounts() async throws {
         StubURLProtocol.setHandler { request in
             switch request.url?.path {
             case "/api/v1/stats":
-                return .init(body: StatusFixtures.statsData(opencode: 5, jarvis: 2))
+                return .init(body: StatusFixtures.statsData(sources: ["opencode": 5, "jarvis": 2]))
             case "/api/v1/jobs":
                 return .init(body: StatusFixtures.jobsData([]))
             default:
@@ -153,9 +177,10 @@ final class AgentsModelTests: XCTestCase {
         let model = AgentsModel(client: client())
         await model.load()
 
-        XCTAssertEqual(model.opencode?.recordCount, 5)
-        XCTAssertNil(model.opencode?.lastActivityAt)
-        XCTAssertTrue(model.opencode?.activeClientNames.isEmpty == true)
+        XCTAssertEqual(model.summaries.count, 2)
+        XCTAssertEqual(summary("opencode", in: model)?.recordCount, 5)
+        XCTAssertNil(summary("opencode", in: model)?.lastActivityAt)
+        XCTAssertTrue(summary("opencode", in: model)?.activeClientNames.isEmpty == true)
         XCTAssertNotNil(model.clientsError)
         XCTAssertNil(model.error)
     }
@@ -171,8 +196,7 @@ final class AgentsModelTests: XCTestCase {
         let model = AgentsModel(client: client())
         await model.load()
 
-        XCTAssertNil(model.opencode)
-        XCTAssertNil(model.jarvis)
+        XCTAssertTrue(model.summaries.isEmpty)
         XCTAssertNotNil(model.error)
         XCTAssertFalse(model.isLoading)
     }
@@ -192,12 +216,19 @@ final class AgentsModelTests: XCTestCase {
         let model = AgentsModel(client: client())
         await model.load()
 
-        XCTAssertNotNil(model.opencode)
-        XCTAssertNil(model.opencode?.lastActivityAt)
-        XCTAssertNil(model.opencode?.lastExternalID)
+        XCTAssertFalse(model.summaries.isEmpty)
+        XCTAssertNil(summary("opencode", in: model)?.lastActivityAt)
+        XCTAssertNil(summary("opencode", in: model)?.lastExternalID)
+    }
+
+    private func summary(_ source: String, in model: AgentsModel) -> AgentSummary? {
+        model.summaries.first { $0.source == source }
     }
 
     private func client() -> APIClient {
-        APIClient(baseURL: baseURL, token: "sb_ui_test", session: StubURLProtocol.session())
+        APIClient(
+            configuration: .init(baseURL: baseURL, token: "sb_ui_test"),
+            session: StubURLProtocol.session()
+        )
     }
 }

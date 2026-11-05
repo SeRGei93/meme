@@ -141,6 +141,10 @@ struct OnboardingService {
             throw error
         }
 
+        // Remote agents such as Jarvis keep their tokens in their own secret
+        // store. Remove the legacy Keychain copy created by older versions.
+        try? keychain.deleteValue(for: KeychainStore.Account.legacyJarvis)
+
         // Rewrite the key even when everything was revoked, so a stale
         // `pending_revocations` is removed from the shared file.
         if var config = try? configStore.load() {
@@ -188,16 +192,9 @@ struct OnboardingService {
             Spec(
                 role: "opencode",
                 baseName: opencodeName,
-                kind: .opencode,
+                kind: .agent,
                 scopes: [.ingest, .mcpRead, .mcpWrite],
                 account: KeychainStore.Account.opencode
-            ),
-            Spec(
-                role: "jarvis",
-                baseName: "jarvis",
-                kind: .jarvis,
-                scopes: [.ingest, .mcpRead, .mcpWrite],
-                account: KeychainStore.Account.jarvis
             ),
             Spec(
                 role: "ui",

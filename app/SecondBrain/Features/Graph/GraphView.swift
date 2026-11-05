@@ -20,6 +20,9 @@ struct GraphView: View {
         .onChange(of: model.projectKey) { _, _ in
             Task { await model.load() }
         }
+        .onChange(of: model.source) { _, _ in
+            Task { await model.load() }
+        }
         .sheet(
             isPresented: $model.isDetailPresented,
             onDismiss: { model.dismissDetail() }
@@ -81,6 +84,12 @@ struct GraphView: View {
                     identifier: "graph.projectsError"
                 )
             }
+            if let sourcesError = model.sourcesError {
+                InlineErrorText(
+                    message: "Список источников недоступен: \(sourcesError)",
+                    identifier: "graph.sourcesError"
+                )
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -103,9 +112,9 @@ struct GraphView: View {
             .help("Фильтр по проекту")
 
             Picker("Источник", selection: $model.source) {
-                Text("Все источники").tag(MemorySource?.none)
-                ForEach(MemorySource.allCases) { source in
-                    Text(source.title).tag(Optional(source))
+                Text("Все источники").tag(String?.none)
+                ForEach(model.sourceOptions) { option in
+                    Text(option.label).tag(Optional(option.source))
                 }
             }
             .pickerStyle(.menu)
@@ -131,23 +140,31 @@ struct GraphView: View {
 
     private var legend: some View {
         HStack(spacing: 12) {
-            legendItem(source: .opencode)
-            legendItem(source: .jarvis)
+            ForEach(model.sourceOptions) { option in
+                legendItem(option)
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Легенда: синие узлы OpenCode, фиолетовые Jarvis")
+        .accessibilityLabel(legendAccessibilityLabel)
     }
 
-    private func legendItem(source: MemorySource) -> some View {
+    private func legendItem(_ option: SourceOption) -> some View {
         HStack(spacing: 5) {
             Circle()
-                .fill(SourceStyle.tint(for: source.rawValue).gradient)
+                .fill(SourceStyle.tint(for: option.source).gradient)
                 .frame(width: 9, height: 9)
                 .accessibilityHidden(true)
-            Text("\(source.title) · \(model.count(for: source))")
+            Text("\(option.title) · \(model.count(for: option.source))")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var legendAccessibilityLabel: String {
+        let parts = model.sourceOptions.map {
+            "\($0.title): \(model.count(for: $0.source))"
+        }
+        return parts.isEmpty ? "Легенда пуста" : "Легенда: " + parts.joined(separator: ", ")
     }
 
     private var projectChoices: [ProjectOption] {
@@ -245,7 +262,7 @@ struct GraphView: View {
         if projectIsEmpty {
             return "Снимите фильтр по проекту или дождитесь новых записей."
         }
-        return "Связи появятся, когда в памяти будет несколько записей из OpenCode или Jarvis."
+        return "Связи появятся, когда в памяти будет несколько записей от агентов."
     }
 
     private func reload() async {
