@@ -218,6 +218,16 @@ final class SearchModel {
         scheduleSearch(immediate: true)
     }
 
+    /// Opens a record requested from outside the search flow (menu bar quick
+    /// search). An already selected record is reloaded instead of ignored.
+    func openRecord(id: Int64) {
+        if selectedID == id {
+            loadSelectedRecord()
+        } else {
+            selectedID = id
+        }
+    }
+
     func moveSelection(by delta: Int) {
         guard !results.isEmpty else { return }
         guard let selectedID,

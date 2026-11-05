@@ -424,10 +424,10 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] launch at login;
   - [x] spool path;
   - [x] reinstall plugin.
-- [ ] Menu bar:
-  - [ ] статус;
-  - [ ] быстрый поиск;
-  - [ ] открыть dashboard.
+- [x] Menu bar:
+  - [x] статус;
+  - [x] быстрый поиск;
+  - [x] открыть dashboard.
 - [x] Состояния:
   - [x] loading/empty/error;
   - [x] тёмная/светлая тема;

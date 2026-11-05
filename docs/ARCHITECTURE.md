@@ -459,6 +459,7 @@ app/
         SourceStyle.swift
         StatusRowView.swift
         StatusComponents.swift
+        UploadQueuePresentation.swift
         UploadQueueSidebarView.swift
       Dashboard/
         DashboardView.swift
@@ -474,6 +475,9 @@ app/
         GraphModel.swift
         GraphCanvasView.swift
         GraphLayout.swift
+      MenuBar/
+        MenuBarPanelView.swift
+        MenuBarSearchModel.swift
       Onboarding/
         OnboardingView.swift
       Search/

@@ -20,6 +20,9 @@ final class AppState {
     var lastSync: Date?
     private(set) var searchFocusRequest = 0
     private var consumedSearchFocus = 0
+    /// Record requested by the menu bar quick search. The main window consumes
+    /// it once, whether it already exists or is created by the menu bar action.
+    private(set) var pendingRecordID: Int64?
     var serverURL: URL?
     var connection: Connection = .unknown
     var health: Health?
@@ -107,6 +110,19 @@ final class AppState {
         guard searchFocusRequest > consumedSearchFocus else { return false }
         consumedSearchFocus = searchFocusRequest
         return true
+    }
+
+    /// Menu bar quick search: switch to Search and ask the main window to show
+    /// this record. The window consumes the id on appearance or on change, so
+    /// it works both when the window is open and when it is created on demand.
+    func openRecord(_ id: Int64) {
+        selectedSection = .search
+        pendingRecordID = id
+    }
+
+    func consumePendingRecord() -> Int64? {
+        defer { pendingRecordID = nil }
+        return pendingRecordID
     }
 
     /// Loads persisted configuration and verifies the stored token. On a clean
