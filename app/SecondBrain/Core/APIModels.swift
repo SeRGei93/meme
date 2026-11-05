@@ -217,6 +217,53 @@ struct Stats: Codable, Equatable, Sendable {
 }
 
 
+// MARK: - Jobs
+
+enum JobStatus: String, Codable, Equatable, Sendable, CaseIterable {
+    case queued
+    case running
+    case done
+    case failed
+}
+
+struct IngestJob: Codable, Equatable, Sendable, Identifiable {
+    let id: Int64
+    let clientID: Int64
+    let kind: String
+    let status: JobStatus
+    let attempts: Int
+    let externalID: String
+    let recordID: Int64?
+    let nextRetryAt: Date?
+    let error: String?
+    let createdAt: Date
+    let updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case clientID = "client_id"
+        case kind
+        case status
+        case attempts
+        case externalID = "external_id"
+        case recordID = "record_id"
+        case nextRetryAt = "next_retry_at"
+        case error
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct JobList: Codable, Equatable, Sendable {
+    let items: [IngestJob]
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor = "next_cursor"
+    }
+}
+
 // MARK: - Clients
 
 enum ClientKind: String, Codable, Equatable, Sendable {

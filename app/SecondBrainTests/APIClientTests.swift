@@ -360,6 +360,35 @@ final class APIClientTests: XCTestCase {
         }
     }
 
+    func testJobsSendsStatusAndLimitAndDecodesTheQueue() async throws {
+        let body = Data("""
+        {"items":[
+          {"id":9,"client_id":2,"kind":"ingest","status":"failed","attempts":3,
+           "external_id":"ses_9","record_id":null,"next_retry_at":null,
+           "error":"upstream timeout","created_at":"2026-11-05T10:00:00Z",
+           "updated_at":"2026-11-05T10:05:00Z"}
+        ],"next_cursor":"abc"}
+        """.utf8)
+        StubURLProtocol.setHandler { _ in .init(body: body) }
+
+        let list = try await client.jobs(status: .failed, limit: 20, cursor: "abc")
+
+        XCTAssertEqual(list.items.count, 1)
+        XCTAssertEqual(list.items[0].clientID, 2)
+        XCTAssertEqual(list.items[0].status, .failed)
+        XCTAssertEqual(list.items[0].error, "upstream timeout")
+        XCTAssertEqual(list.nextCursor, "abc")
+
+        let sent = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.url?.path, "/api/v1/jobs")
+        let components = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(sent.url), resolvingAgainstBaseURL: false)
+        )
+        XCTAssertEqual(components.queryItems?.first { $0.name == "status" }?.value, "failed")
+        XCTAssertEqual(components.queryItems?.first { $0.name == "limit" }?.value, "20")
+        XCTAssertEqual(components.queryItems?.first { $0.name == "cursor" }?.value, "abc")
+    }
+
     private static let healthJSON = """
     {
       "status": "ok",

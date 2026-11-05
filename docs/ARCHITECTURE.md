@@ -364,6 +364,7 @@ flowchart TB
 | Record Detail | Карточка и `raw_text` |
 | Graph | Визуализация связей |
 | Projects | Список проектов |
+| Agents | Статус OpenCode и Jarvis: активность, токены, плагин |
 | Settings | URL, токены, launch at login |
 | API Client | HTTP-клиент к `brain` |
 | Spool Watcher | Наблюдение за `spool/` |
@@ -453,7 +454,20 @@ app/
       Main/
         ContentView.swift
         AppSidebarView.swift
+        AppSection.swift
+        DashboardPanel.swift
+        StatusRowView.swift
+        StatusComponents.swift
         UploadQueueSidebarView.swift
+      Dashboard/
+        DashboardView.swift
+        DashboardModel.swift
+      Projects/
+        ProjectsView.swift
+        ProjectsModel.swift
+      Agents/
+        AgentsView.swift
+        AgentsModel.swift
       Onboarding/
         OnboardingView.swift
       Search/
@@ -466,6 +480,7 @@ app/
       APIClient.swift
       APIModels.swift
       RawTextSearch.swift
+      DateDisplay.swift
       APIError.swift
       KeychainStore.swift
       SpoolBundle.swift

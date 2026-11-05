@@ -42,6 +42,10 @@ final class UITestURLProtocol: URLProtocol {
             }
         case "/api/v1/projects":
             payload = (200, Self.projectsResponse())
+        case "/api/v1/jobs":
+            payload = (200, Self.jobsResponse(query: query))
+        case "/api/v1/clients":
+            payload = (200, Data(Self.clientsJSON.utf8))
         default:
             if path.hasPrefix("/api/v1/records/"),
                let id = Int64(path.split(separator: "/").last ?? ""),
@@ -218,6 +222,74 @@ final class UITestURLProtocol: URLProtocol {
             ?? Data("{}".utf8)
     }
 
+    private static let jobs: [[String: Any]] = [
+        [
+            "id": 12,
+            "client_id": 2,
+            "kind": "ingest",
+            "status": "done",
+            "attempts": 1,
+            "external_id": "ses_meme_search",
+            "record_id": 2,
+            "next_retry_at": NSNull(),
+            "error": NSNull(),
+            "created_at": "2026-11-05T11:00:00Z",
+            "updated_at": "2026-11-05T11:01:00Z",
+        ],
+        [
+            "id": 11,
+            "client_id": 3,
+            "kind": "memory",
+            "status": "done",
+            "attempts": 1,
+            "external_id": "mem_sqlite",
+            "record_id": 1,
+            "next_retry_at": NSNull(),
+            "error": NSNull(),
+            "created_at": "2026-11-05T09:00:00Z",
+            "updated_at": "2026-11-05T09:00:01Z",
+        ],
+        [
+            "id": 10,
+            "client_id": 2,
+            "kind": "ingest",
+            "status": "failed",
+            "attempts": 3,
+            "external_id": "ses_failed_upload",
+            "record_id": NSNull(),
+            "next_retry_at": NSNull(),
+            "error": "upstream timeout after 30s",
+            "created_at": "2026-11-05T08:00:00Z",
+            "updated_at": "2026-11-05T08:05:00Z",
+        ],
+    ]
+
+    private static func jobsResponse(query: [String: String]) -> Data {
+        let status = query["status"]
+        let limit = Int(query["limit"] ?? "50") ?? 50
+        let filtered = jobs.filter { job in
+            guard let status else { return true }
+            return job["status"] as? String == status
+        }
+        let body: [String: Any] = ["items": Array(filtered.prefix(limit))]
+        return (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
+            ?? Data("{}".utf8)
+    }
+
+    private static let clientsJSON = """
+    {"items":[
+      {"id":1,"name":"second-brain-app","kind":"ui","scopes":["ui","admin"],
+       "source":null,"created_at":"2026-10-01T12:00:00Z",
+       "last_seen_at":null,"revoked_at":null},
+      {"id":2,"name":"opencode-macbook","kind":"opencode","scopes":["ingest"],
+       "source":"opencode","created_at":"2026-10-01T12:00:00Z",
+       "last_seen_at":null,"revoked_at":null},
+      {"id":3,"name":"jarvis","kind":"jarvis","scopes":["ingest"],
+       "source":"jarvis","created_at":"2026-10-01T12:00:00Z",
+       "last_seen_at":null,"revoked_at":null}
+    ]}
+    """
+
     private static let healthJSON = """
     {"status":"ok","version":"ui-test","schema_version":3,
      "time":"2026-11-05T10:00:00Z",
@@ -229,7 +301,8 @@ final class UITestURLProtocol: URLProtocol {
       "by_source":{"opencode":2,"jarvis":1},
       "by_card_status":{"heuristic":0,"queued":0,"ok":3,"failed":0}},
      "projects":2,"clients":1,
-     "jobs":{"queued":0,"running":0,"done":3,"failed":0},
+     "jobs":{"queued":0,"running":0,"done":3,"failed":1},
+     "last_ingest_at":"2026-11-05T11:00:00Z",
      "database":{"status":"ok","schema_version":3,"size_bytes":2048}}
     """
 }

@@ -48,9 +48,10 @@ menu bar или кнопку Quit.
 `app/SecondBrain/Core`:
 
 - `APIClient` — `URLSession` + async/await, типизированные `GET /health`,
-  `/api/v1/search`, `/records/{id}`, `/projects`, `/stats`;
+  `/api/v1/search`, `/records/{id}`, `/projects`, `/stats`, `/jobs`, `/clients`;
 - `APIModels` — `Codable`-модели контрактов (`Health`, `Card`, `Record`,
-  `SearchResponse`, `Project`, `Stats`, произвольный `JSONValue`);
+  `SearchResponse`, `Project`, `Stats`, `IngestJob`, `ClientInfo`, произвольный
+  `JSONValue`);
 - `APIError` — разбор `ErrorEnvelope`, флаги `isRetryable` и
   `requiresReauthentication` для `401/403`;
 - `KeychainStore` — bearer-токены в Keychain по аккаунтам `opencode`, `jarvis`,
@@ -131,12 +132,15 @@ Settings показывает и меняет:
 `SECOND_BRAIN_OPENCODE_DIR` (каталог OpenCode), `SECOND_BRAIN_PLUGIN_SOURCE`
 (каталог с файлами плагина), `SECOND_BRAIN_UI_TOKEN` (подменить `ui`-токен в
 Debug), `SECOND_BRAIN_UI_MOCK=1` (in-process mock API), `SECOND_BRAIN_UI_QUERY`
-и `SECOND_BRAIN_UI_RAW_QUERY` (стартовый запрос и raw-фильтр для UI-тестов).
+`SECOND_BRAIN_UI_RAW_QUERY` (стартовый запрос и raw-фильтр), `SECOND_BRAIN_UI_SECTION`
+(стартовый раздел) и `SECOND_BRAIN_UI_TOKENS` (подменить наличие токенов) для
+UI-тестов.
 
 ## Поиск и карточка
 
-Главное окно — двухколоночный интерфейс: слева статус, очередь загрузки и
-настройки, справа поиск памяти.
+Главное окно — двухколоночный интерфейс: слева навигация (Обзор, Поиск,
+Проекты, Агенты), статус, очередь загрузки и настройки; справа — выбранный
+раздел.
 
 - Запрос отправляется с debounce 300 мс; пустая строка не делает запрос.
 - Фильтры: проект (из `/api/v1/projects`), источник (`opencode`/`jarvis`) и
@@ -153,6 +157,23 @@ Debug), `SECOND_BRAIN_UI_MOCK=1` (in-process mock API), `SECOND_BRAIN_UI_QUERY`
   поэтому тёмная и светлая темы поддерживаются без отдельных палитр.
 - Ключевые элементы имеют accessibility labels и identifiers; одинаковые
   identifiers используются UI-тестами (`search.*`, `record.*`).
+
+## Обзор, проекты и агенты
+
+- **Обзор** показывает количество записей (финальные/черновики), проектов и
+  активных клиентов, очередь сервера и локальную очередь, последнюю активность
+  и список неудачных ingestion-jobs с замаскированным текстом ошибки. Пустая
+  память и отсутствие ошибок имеют отдельные состояния.
+- **Проекты** — список из `/api/v1/projects` с количеством записей, путём и
+  последней активностью. Клик по проекту переключает на поиск и выставляет
+  фильтр `project_key`; фильтр виден плашкой и сбрасывается отдельной кнопкой.
+- **Агенты** показывает по OpenCode и Jarvis: количество записей, последнюю
+  запись/память по свежей job, статус job, наличие токена и активный клиент.
+  Для OpenCode дополнительно видны состояние плагина и MCP; ниже — очередь
+  сервера и локальная очередь с кнопкой отправки.
+- Данные читаются `ui`-токеном (`ui` + `admin`), запросы идут асинхронно и не
+  блокируют окно. Ошибки загрузки статистики, jobs или клиентов показываются
+  отдельно и не скрывают уже полученные данные.
 
 ## Spool watcher и UploadQueue
 

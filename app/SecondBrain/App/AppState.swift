@@ -16,7 +16,10 @@ final class AppState {
     }
 
     var statusText = "Готов к работе"
+    var selectedSection = AppSection.initial()
     var lastSync: Date?
+    private(set) var searchFocusRequest = 0
+    private var consumedSearchFocus = 0
     var serverURL: URL?
     var connection: Connection = .unknown
     var health: Health?
@@ -91,6 +94,20 @@ final class AppState {
 
 
     // MARK: Lifecycle
+
+    /// Menu bar / ⌘K entry point: switch to Search and ask the field to focus.
+    func focusSearch() {
+        selectedSection = .search
+        searchFocusRequest &+= 1
+    }
+
+    /// True once per focus request, so recreating the search view does not
+    /// steal focus again on a later navigation.
+    func consumeSearchFocusRequest() -> Bool {
+        guard searchFocusRequest > consumedSearchFocus else { return false }
+        consumedSearchFocus = searchFocusRequest
+        return true
+    }
 
     /// Loads persisted configuration and verifies the stored token. On a clean
     /// install (or after a manual reset) it presents onboarding.
@@ -245,6 +262,20 @@ final class AppState {
         for account in KeychainStore.Account.all {
             presence[account] = (try? keychain.value(for: account)) != nil
         }
+        #if DEBUG
+        // UI tests must not depend on the developer's real Keychain.
+        if let forced = ProcessInfo.processInfo.environment["SECOND_BRAIN_UI_TOKENS"] {
+            let accounts = Set(
+                forced
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            )
+            for account in KeychainStore.Account.all {
+                presence[account] = accounts.contains(account)
+            }
+        }
+        #endif
         tokenPresence = presence
         tokenRevision &+= 1
     }
@@ -415,8 +446,9 @@ final class AppState {
         makeClient(for: KeychainStore.Account.opencode)
     }
 
-    /// Read-only client for search and record detail. Uses the `ui` token so a
-    /// revoked OpenCode token does not break browsing the memory.
+    /// Read-only client for search, record detail, the dashboard and the agent
+    /// screens. Uses the `ui` token (ui + admin scopes) so a revoked OpenCode
+    /// token does not break browsing the memory.
     func makeReadClient() -> APIClient? {
         makeClient(for: KeychainStore.Account.ui)
     }
