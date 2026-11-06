@@ -72,6 +72,33 @@ final class PluginInstallerTests: XCTestCase {
         XCTAssertEqual(try permissions(of: destination.appendingPathComponent("index.ts")), 0o644)
     }
 
+    func testUninstallRemovesOnlyTheAppPlugin() throws {
+        let destination = try installer.install().directory
+        let other = openCodeDirectory.appendingPathComponent("plugins/other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: other.appendingPathComponent("index.ts"))
+
+        let status = try installer.uninstall()
+
+        XCTAssertEqual(status.state, .notInstalled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.appendingPathComponent("index.ts").path))
+    }
+
+    func testUninstallRefusesToDeleteARegularFileAtThePluginPath() throws {
+        let plugins = openCodeDirectory.appendingPathComponent("plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugins, withIntermediateDirectories: true)
+        let occupied = plugins.appendingPathComponent("second-brain")
+        try Data("not a plugin directory".utf8).write(to: occupied)
+
+        XCTAssertThrowsError(try installer.uninstall()) { error in
+            guard case PluginInstallError.pathOccupied = error else {
+                return XCTFail("expected pathOccupied, got \(error)")
+            }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: occupied.path))
+    }
+
     func testReinstallOverwritesAModifiedInstallation() throws {
         let destination = try installer.install().directory
         try Data("// tampered\n".utf8).write(to: destination.appendingPathComponent("index.ts"))

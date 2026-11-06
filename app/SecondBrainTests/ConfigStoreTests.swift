@@ -89,7 +89,12 @@ final class ConfigStoreTests: XCTestCase {
 
     func testSavingRemovesAppOwnedKeysWhenTheyBecomeNil() throws {
         let client = StoredClient(id: 7, name: "jarvis")
-        try store.save(AppConfig(serverURL: URL(string: "https://brain.test")!, appClients: ["jarvis": client], pendingRevocations: [9, 10]))
+        try store.save(AppConfig(
+            serverURL: URL(string: "https://brain.test")!,
+            appClients: ["jarvis": client],
+            pendingRevocations: [9, 10],
+            autoCapture: true
+        ))
 
         try store.save(AppConfig(serverURL: URL(string: "https://brain.test")!))
 
@@ -97,7 +102,28 @@ final class ConfigStoreTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertNil(object["app_clients"])
         XCTAssertNil(object["pending_revocations"])
+        XCTAssertNil(object["auto_capture"])
         XCTAssertEqual(object["server_url"] as? String, "https://brain.test")
+    }
+
+    func testAutoCaptureRoundTripsAndIsRemovedWhenNil() throws {
+        try store.save(AppConfig(
+            serverURL: URL(string: "https://brain.test")!,
+            autoCapture: true
+        ))
+        XCTAssertEqual(try store.load()?.autoCapture, true)
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(object["auto_capture"] as? Bool, true)
+
+        try store.save(AppConfig(serverURL: URL(string: "https://brain.test")!))
+        object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any]
+        )
+        XCTAssertNil(object["auto_capture"])
+        XCTAssertNil(try store.load()?.autoCapture)
     }
 
     func testMalformedFileThrowsInvalidConfig() throws {

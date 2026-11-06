@@ -184,6 +184,24 @@ struct PluginInstaller {
         return status()
     }
 
+    /// Removes the app-owned plugin directory. Other plugins in
+    /// `plugins/` are never touched, so disabling auto-capture is safe.
+    @discardableResult
+    func uninstall() throws -> PluginInstallStatus {
+        guard fileManager.fileExists(atPath: destination.path) else {
+            return status()
+        }
+        guard isDirectory(destination) else {
+            throw PluginInstallError.pathOccupied(destination.path)
+        }
+        do {
+            try fileManager.removeItem(at: destination)
+        } catch {
+            throw map(error, path: destination.path)
+        }
+        return status()
+    }
+
     /// Removes staging/backup directories left by an interrupted install. They
     /// live beside `plugins/`, so this never touches an installed plugin.
     private func sweepStagingArtifacts() {

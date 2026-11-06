@@ -430,6 +430,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
   - [x] клик → карточка.
 - [x] Settings:
   - [x] server URL;
+  - [x] автозахват OpenCode (opt-in);
   - [x] токены;
   - [x] launch at login;
   - [x] spool path;
@@ -639,7 +640,7 @@ M3 можно делать параллельно с M1–M2. M7 — после 
 - [ ] Dokploy: домен, TLS, volume, env, one replica, stop-first.
 - [ ] S3 bucket `meme`, access key, права, `backup run/list`.
 - [ ] S3 versioning off или подтверждён lifecycle.
-- [ ] OpenCode plugin установлен и доверен.
+- [ ] MCP настроен; автозахват OpenCode включён только если нужен.
 - [ ] MCP config с `oauth:false` и bearer.
 - [ ] Xcode archive, Developer ID, notarization, staple, DMG.
 - [ ] Onboarding на чистой macOS.

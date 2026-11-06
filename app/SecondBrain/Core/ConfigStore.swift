@@ -25,6 +25,9 @@ struct AppConfig: Codable, Equatable, Sendable {
     var appClients: [String: StoredClient]?
     /// Ids whose revocation failed; retried on the next onboarding run.
     var pendingRevocations: [Int64]?
+    /// Whether the OpenCode capture plugin should be installed. `nil` keeps
+    /// older configs working: the installed plugin is the source of truth.
+    var autoCapture: Bool?
 
     init(
         serverURL: URL? = nil,
@@ -35,7 +38,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         maxToolCallsPerMessage: Int? = nil,
         maxToolFieldChars: Int? = nil,
         appClients: [String: StoredClient]? = nil,
-        pendingRevocations: [Int64]? = nil
+        pendingRevocations: [Int64]? = nil,
+        autoCapture: Bool? = nil
     ) {
         self.serverURL = serverURL
         self.spoolDir = spoolDir
@@ -46,6 +50,7 @@ struct AppConfig: Codable, Equatable, Sendable {
         self.maxToolFieldChars = maxToolFieldChars
         self.appClients = appClients
         self.pendingRevocations = pendingRevocations
+        self.autoCapture = autoCapture
     }
 
     enum CodingKeys: String, CodingKey {
@@ -58,6 +63,7 @@ struct AppConfig: Codable, Equatable, Sendable {
         case maxToolFieldChars = "max_tool_field_chars"
         case appClients = "app_clients"
         case pendingRevocations = "pending_revocations"
+        case autoCapture = "auto_capture"
     }
 }
 
@@ -123,7 +129,7 @@ struct ConfigStore {
     /// Keys owned exclusively by the app. A `nil` value removes the key, so a
     /// rollback can restore a config that predates onboarding.
     private static let appOwnedKeys: Set<String> = [
-        "server_url", "app_clients", "pending_revocations",
+        "server_url", "app_clients", "pending_revocations", "auto_capture",
     ]
 
     /// Writes the app-owned keys, preserving every other key already present in
