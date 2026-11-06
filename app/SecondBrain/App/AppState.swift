@@ -52,6 +52,9 @@ final class AppState {
     var settingsNotice: String?
     var settingsError: String?
     var integrationBusy = false
+    /// True when the OpenCode plugin is installed and therefore capturing
+    /// sessions. MCP is configured independently of this flag.
+    private(set) var autoCaptureEnabled = false
     /// Bumped whenever token/keychain presence is re-read, so read-only screens
     /// can rebuild their API client after rotation.
     private(set) var tokenRevision = 0
@@ -140,6 +143,11 @@ final class AppState {
         let stored = try? configStore.load()
         serverURL = stored?.serverURL
         refreshIntegrationStatus()
+        if stored?.autoCapture == nil, pluginCapturesSessions {
+            // Existing installations keep capturing; record the explicit
+            // preference so the next launch does not depend on inference.
+            try? persistAutoCapture(true)
+        }
 
         #if DEBUG
         // UI tests need a deterministic window without onboarding.
@@ -175,7 +183,11 @@ final class AppState {
 
     /// Runs onboarding and persists tokens only after the server verified them.
     @discardableResult
-    func connect(serverURLText: String, adminToken: String) async -> Bool {
+    func connect(
+        serverURLText: String,
+        adminToken: String,
+        autoCapture: Bool? = nil
+    ) async -> Bool {
         guard !onboardingBusy else { return false }
         onboardingBusy = true
         onboardingError = nil
@@ -207,9 +219,20 @@ final class AppState {
             if let token = try? keychain.value(for: KeychainStore.Account.ui) {
                 await loadStats(using: APIClient(baseURL: url, token: token, session: session))
             }
-            // Installing the plugin is best effort: a permissions problem must
-            // not undo a successful token rotation. Settings shows the result.
-            installOpenCodeIntegration()
+            // Auto-capture is best effort: a plugin problem must not undo a
+            // successful token rotation. MCP is configured even when the
+            // plugin is disabled. `nil` keeps the current installation.
+            if let autoCapture {
+                setAutoCapture(autoCapture)
+            } else {
+                do {
+                    _ = try configureMCPForCurrentServer()
+                } catch {
+                    settingsError = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                }
+                refreshIntegrationStatus()
+            }
             startUploads()
             return true
         } catch {
@@ -256,7 +279,12 @@ final class AppState {
                 return "OpenCode: плагин установлен, MCP не настроен"
             }
         case .notInstalled:
-            return "OpenCode: плагин не установлен"
+            if mcpStatus?.state == .configured {
+                return mcpTokenAvailable
+                    ? "OpenCode: MCP готов, автозахват выключен"
+                    : "OpenCode: MCP настроен, но mcp_token отсутствует; автозахват выключен"
+            }
+            return "OpenCode: MCP не настроен, автозахват выключен"
         case .outdated:
             return "OpenCode: плагин нужно обновить"
         case .error(let message):
@@ -299,7 +327,26 @@ final class AppState {
         }
         #endif
         tokenPresence = presence
+        autoCaptureEnabled = pluginCapturesSessions
         tokenRevision &+= 1
+    }
+
+    private var pluginCapturesSessions: Bool {
+        switch pluginStatus?.state {
+        case .installed, .outdated:
+            return true
+        case .error:
+            // The status check may fail (for example the bundled source is
+            // missing) while an installed plugin is still capturing.
+            guard let directory = pluginStatus?.directory else { return false }
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(
+                atPath: directory.path,
+                isDirectory: &isDirectory
+            ) && isDirectory.boolValue
+        default:
+            return false
+        }
     }
 
     /// Installs (or reinstalls) the plugin and rewrites the MCP entry. A failure
@@ -314,10 +361,10 @@ final class AppState {
 
         do {
             pluginStatus = try pluginInstaller.install()
+            // A manually installed plugin is an explicit opt-in.
+            try? persistAutoCapture(true)
 
-            if let effectiveServerURL {
-                serverURL = effectiveServerURL
-                try configureMCP(serverURL: effectiveServerURL)
+            if try configureMCPForCurrentServer() {
                 settingsNotice = "Плагин OpenCode установлен, MCP config настроен"
             } else {
                 settingsNotice = "Плагин OpenCode установлен. MCP config появится после указания URL сервера"
@@ -329,6 +376,75 @@ final class AppState {
             refreshIntegrationStatus()
             return false
         }
+    }
+
+    /// Enables or disables automatic OpenCode session capture. MCP stays
+    /// configured either way; disabling only removes the app-owned plugin.
+    @discardableResult
+    func setAutoCapture(_ enabled: Bool) -> Bool {
+        guard !integrationBusy else { return false }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        settingsError = nil
+        settingsNotice = nil
+
+        var fileActionError: Error?
+        do {
+            if enabled {
+                pluginStatus = try pluginInstaller.install()
+            } else {
+                try pluginInstaller.uninstall()
+                pluginStatus = pluginInstaller.status()
+            }
+        } catch {
+            fileActionError = error
+        }
+
+        // MCP is independent of the plugin: configure it even when install or
+        // removal failed, so a broken plugin never cuts the agent off.
+        var mcpConfigured = false
+        var mcpError: Error?
+        do {
+            mcpConfigured = try configureMCPForCurrentServer()
+        } catch {
+            mcpError = error
+        }
+
+        refreshIntegrationStatus()
+
+        if let fileActionError {
+            settingsError = (fileActionError as? LocalizedError)?.errorDescription
+                ?? fileActionError.localizedDescription
+            return false
+        }
+
+        // Only persist what actually happened on disk. A failed enable must not
+        // leave `auto_capture=true` with no plugin, and a failed disable must not
+        // pretend the plugin stopped capturing.
+        do {
+            try persistAutoCapture(enabled)
+        } catch {
+            settingsError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return false
+        }
+
+        if let mcpError {
+            settingsError = (mcpError as? LocalizedError)?.errorDescription
+                ?? mcpError.localizedDescription
+            return false
+        }
+
+        if enabled {
+            settingsNotice = mcpConfigured
+                ? "Автозахват включён: плагин установлен, MCP настроен"
+                : "Автозахват включён: плагин установлен, MCP config появится после указания URL"
+        } else {
+            settingsNotice = mcpConfigured
+                ? "Автозахват выключен, MCP настроен"
+                : "Автозахват выключен. MCP config появится после указания URL"
+        }
+        return true
     }
 
     /// Saves a new server URL, rewrites the MCP entry and verifies the server.
@@ -531,6 +647,23 @@ final class AppState {
     /// entry does not depend on the order of calls.
     private var effectiveServerURL: URL? {
         serverURL ?? (try? configStore.load())?.serverURL
+    }
+
+    /// Writes the MCP entry when a server URL is known. Returns false while
+    /// onboarding has not supplied one yet.
+    private func configureMCPForCurrentServer() throws -> Bool {
+        guard let effectiveServerURL else { return false }
+        serverURL = effectiveServerURL
+        try configureMCP(serverURL: effectiveServerURL)
+        return true
+    }
+
+    private func persistAutoCapture(_ enabled: Bool) throws {
+        // Never replace an unreadable config with a blank one: it also holds
+        // spool settings, app clients and plugin keys.
+        var config = try configStore.load() ?? AppConfig()
+        config.autoCapture = enabled
+        try configStore.save(config)
     }
 
     private func configureMCP(serverURL: URL) throws {

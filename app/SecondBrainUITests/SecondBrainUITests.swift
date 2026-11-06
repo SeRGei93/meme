@@ -746,6 +746,10 @@ final class SecondBrainUITests: XCTestCase {
         let settings = app.windows["Second Brain Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
 
+        let autoCapture = settings.switches["settings.autoCapture"]
+        XCTAssertTrue(autoCapture.waitForExistence(timeout: 10))
+        XCTAssertEqual(String(describing: autoCapture.value ?? "nil"), "0")
+
         let status = settings.staticTexts["settings.pluginStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         let notInstalled = XCTNSPredicateExpectation(
@@ -763,6 +767,7 @@ final class SecondBrainUITests: XCTestCase {
             object: status
         )
         XCTAssertEqual(XCTWaiter().wait(for: [installed], timeout: 10), .completed)
+        XCTAssertEqual(String(describing: autoCapture.value ?? "nil"), "1")
         let installedPlugin = openCode.appendingPathComponent("plugins/second-brain")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: installedPlugin.appendingPathComponent("index.ts").path)
@@ -801,26 +806,58 @@ final class SecondBrainUITests: XCTestCase {
             XCTAssertEqual(embeddedPath, tokenPath)
         }
 
-        let reinstall = settings.buttons["settings.installPlugin"]
-        let readyToReinstall = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "Переустановить"),
-            object: reinstall
+        autoCapture.click()
+        let removed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Не установлен"),
+            object: status
         )
-        XCTAssertEqual(XCTWaiter().wait(for: [readyToReinstall], timeout: 10), .completed)
-        reinstall.click()
-        XCTAssertEqual(status.value as? String, "Установлен")
+        XCTAssertEqual(XCTWaiter().wait(for: [removed], timeout: 10), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installedPlugin.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: configURL.path),
+            "MCP config must survive disabling auto-capture"
+        )
+        XCTAssertEqual(String(describing: autoCapture.value ?? "nil"), "0")
+
+        let installAgain = settings.buttons["settings.installPlugin"]
+        let readyToInstall = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Установить"),
+            object: installAgain
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [readyToInstall], timeout: 10), .completed)
+        installAgain.click()
+        let reinstalled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Установлен"),
+            object: status
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [reinstalled], timeout: 10), .completed)
+        let toggleOn = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == 1"),
+            object: autoCapture
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [toggleOn], timeout: 10), .completed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installedPlugin.path))
     }
 
     func testOnboardingShowsConnectionFormOnCleanInstall() throws {
         let app = XCUIApplication()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("second-brain-ui-\(UUID().uuidString)", isDirectory: true)
+        let openCode = directory.appendingPathComponent("opencode", isDirectory: true)
         app.launchEnvironment["SECOND_BRAIN_CONFIG_DIR"] = directory.path
+        app.launchEnvironment["SECOND_BRAIN_OPENCODE_DIR"] = openCode.path
         app.launch()
 
         XCTAssertTrue(app.textFields["onboarding.serverURL"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.secureTextFields["onboarding.adminToken"].exists)
         XCTAssertTrue(app.buttons["onboarding.connect"].exists)
+        let autoCapture = element("onboarding.autoCapture", in: app)
+        XCTAssertTrue(autoCapture.exists)
+        XCTAssertEqual(
+            String(describing: autoCapture.value ?? "nil"),
+            "0",
+            "auto-capture must be opt-in on a clean install"
+        )
     }
 
     private func makeClientsConfig() throws -> URL {

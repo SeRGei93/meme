@@ -6,6 +6,7 @@ struct OnboardingView: View {
     @Environment(AppState.self) private var appState
     @State private var serverURLText = ""
     @State private var adminToken = ""
+    @State private var autoCapture = false
     @State private var didPrefill = false
 
     private var canSubmit: Bool {
@@ -19,7 +20,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(appState.isConfigured ? "Обновить подключение" : "Подключение к Second Brain")
                     .font(.title2.bold())
-                Text("Укажите адрес сервера и bootstrap admin token. Приложение создаст два клиента: локальный OpenCode и само приложение.")
+                Text("Укажите адрес сервера и bootstrap admin token. Приложение создаст клиента для MCP и клиента для самого приложения.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -34,6 +35,21 @@ struct OnboardingView: View {
                 SecureField("Admin token", text: $adminToken, prompt: Text("BRAIN_ADMIN_TOKEN"))
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("onboarding.adminToken")
+
+                Toggle(
+                    "Автоматически сохранять сессии OpenCode",
+                    isOn: $autoCapture
+                )
+                .accessibilityIdentifier("onboarding.autoCapture")
+
+                Text(
+                    autoCapture
+                        ? "Плагин будет сохранять каждую сессию OpenCode. MCP настроится в любом случае."
+                        : "По умолчанию работает только MCP: агент сохраняет по просьбе или сам. Плагин можно включить позже в Settings."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if let error = appState.onboardingError {
@@ -46,7 +62,11 @@ struct OnboardingView: View {
             HStack(spacing: 12) {
                 Button(appState.onboardingBusy ? "Подключение…" : "Connect") {
                     Task {
-                        await appState.connect(serverURLText: serverURLText, adminToken: adminToken)
+                        await appState.connect(
+                            serverURLText: serverURLText,
+                            adminToken: adminToken,
+                            autoCapture: autoCapture
+                        )
                     }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -79,5 +99,6 @@ struct OnboardingView: View {
         guard !didPrefill else { return }
         didPrefill = true
         serverURLText = appState.serverURL?.absoluteString ?? "https://"
+        autoCapture = appState.autoCaptureEnabled
     }
 }

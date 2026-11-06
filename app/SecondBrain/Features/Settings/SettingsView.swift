@@ -71,6 +71,24 @@ struct SettingsView: View {
             }
 
             Section("OpenCode") {
+                Toggle(
+                    "Автоматически сохранять сессии OpenCode",
+                    isOn: Binding(
+                        get: { appState.autoCaptureEnabled },
+                        set: { _ = appState.setAutoCapture($0) }
+                    )
+                )
+                .disabled(appState.integrationBusy)
+                .accessibilityIdentifier("settings.autoCapture")
+
+                Text(
+                    appState.autoCaptureEnabled
+                        ? "Плагин пишет каждую сессию в spool. MCP работает независимо."
+                        : "Выключено: работает только MCP. Агент сохраняет по просьбе или сам."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
                 HStack {
                     Text("Плагин")
                     Spacer()

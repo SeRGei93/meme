@@ -200,18 +200,47 @@ final class AppStateIntegrationTests: XCTestCase {
         XCTAssertEqual(state.spoolPathText, configDirectory.appendingPathComponent("spool").path)
     }
 
-    func testConnectInstallsThePluginAndMCPConfigAfterOnboarding() async throws {
+    func testConnectDefaultsToMCPOnlyWithoutThePlugin() async throws {
         StubOnboardingServer.install()
         let state = makeState()
 
         let connected = await state.connect(
             serverURLText: "https://brain.example.test",
-            adminToken: "admin-secret"
+            adminToken: "admin-secret",
+            autoCapture: false
+        )
+
+        XCTAssertTrue(connected)
+        XCTAssertEqual(state.pluginStatus?.state, PluginInstallState.notInstalled)
+        XCTAssertFalse(state.autoCaptureEnabled)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: openCodeDirectory.appendingPathComponent("plugins/second-brain/index.ts").path
+            )
+        )
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, false)
+
+        let entry = try mcpEntry()
+        XCTAssertEqual(entry["url"] as? String, "https://brain.example.test/mcp")
+        XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_agent_1")
+    }
+
+    func testConnectWithAutoCaptureInstallsThePluginAndMCPConfig() async throws {
+        StubOnboardingServer.install()
+        let state = makeState()
+
+        let connected = await state.connect(
+            serverURLText: "https://brain.example.test",
+            adminToken: "admin-secret",
+            autoCapture: true
         )
 
         XCTAssertTrue(connected)
         XCTAssertEqual(state.pluginStatus?.state, PluginInstallState.installed)
+        XCTAssertTrue(state.autoCaptureEnabled)
         XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, true)
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: openCodeDirectory.appendingPathComponent("plugins/second-brain/index.ts").path
@@ -225,6 +254,47 @@ final class AppStateIntegrationTests: XCTestCase {
             "Bearer {file:\(configDirectory.appendingPathComponent("mcp_token").path)}"
         )
         XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_agent_1")
+    }
+
+    func testSetAutoCaptureInstallsAndRemovesThePluginWhileKeepingMCP() throws {
+        try ConfigStore(directory: configDirectory).save(
+            AppConfig(serverURL: URL(string: "https://meme.aimerce.by")!)
+        )
+        let state = makeState()
+        state.refreshIntegrationStatus()
+
+        XCTAssertTrue(state.setAutoCapture(true))
+        XCTAssertEqual(state.pluginStatus?.state, PluginInstallState.installed)
+        XCTAssertTrue(state.autoCaptureEnabled)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, true)
+
+        XCTAssertTrue(state.setAutoCapture(false))
+        XCTAssertEqual(state.pluginStatus?.state, PluginInstallState.notInstalled)
+        XCTAssertFalse(state.autoCaptureEnabled)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, false)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: openCodeDirectory.appendingPathComponent("plugins/second-brain/index.ts").path
+            )
+        )
+    }
+
+    func testBootstrapPersistsAutoCaptureForAnExistingPlugin() async throws {
+        try ConfigStore(directory: configDirectory).save(
+            AppConfig(serverURL: URL(string: "https://meme.aimerce.by")!)
+        )
+        _ = try PluginInstaller(
+            openCodeDirectory: openCodeDirectory,
+            sourceDirectory: pluginSource
+        ).install()
+        let state = makeState()
+
+        await state.bootstrap()
+
+        XCTAssertTrue(state.autoCaptureEnabled)
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, true)
     }
 
     func testBootstrapUploadsExistingSpoolFiles() async throws {
@@ -302,7 +372,8 @@ final class AppStateIntegrationTests: XCTestCase {
 
         let connected = await state.connect(
             serverURLText: "https://brain.example.test",
-            adminToken: "admin-secret"
+            adminToken: "admin-secret",
+            autoCapture: true
         )
 
         XCTAssertTrue(connected)
@@ -312,6 +383,49 @@ final class AppStateIntegrationTests: XCTestCase {
             return XCTFail("expected a plugin error, got \(String(describing: state.pluginStatus))")
         }
         XCTAssertNotNil(state.settingsError)
+        XCTAssertFalse(state.autoCaptureEnabled)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+        XCTAssertEqual(try MCPTokenFile(directory: configDirectory).read(), "sb_agent_1")
+    }
+
+    func testConnectWithoutAutoCapturePreservesAnInstalledPlugin() async throws {
+        try ConfigStore(directory: configDirectory).save(
+            AppConfig(serverURL: URL(string: "https://brain.example.test")!)
+        )
+        _ = try PluginInstaller(
+            openCodeDirectory: openCodeDirectory,
+            sourceDirectory: pluginSource
+        ).install()
+        StubOnboardingServer.install()
+        let state = makeState()
+
+        let connected = await state.connect(
+            serverURLText: "https://brain.example.test",
+            adminToken: "admin-secret"
+        )
+
+        XCTAssertTrue(connected)
+        XCTAssertEqual(state.pluginStatus?.state, PluginInstallState.installed)
+        XCTAssertTrue(state.autoCaptureEnabled)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
+    }
+
+    func testSetAutoCaptureFailureKeepsThePersistedPreference() throws {
+        try ConfigStore(directory: configDirectory).save(
+            AppConfig(
+                serverURL: URL(string: "https://brain.example.test")!,
+                autoCapture: false
+            )
+        )
+        let state = makeState(source: root.appendingPathComponent("missing", isDirectory: true))
+        state.refreshIntegrationStatus()
+
+        XCTAssertFalse(state.setAutoCapture(true))
+
+        XCTAssertEqual(try ConfigStore(directory: configDirectory).load()?.autoCapture, false)
+        XCTAssertFalse(state.autoCaptureEnabled)
+        XCTAssertNotNil(state.settingsError)
+        XCTAssertEqual(state.mcpStatus?.state, OpenCodeConfigState.configured)
     }
 
     func testIntegrationSummaryIsVisibleOutsideSettings() throws {
@@ -321,7 +435,7 @@ final class AppStateIntegrationTests: XCTestCase {
         let state = makeState()
         state.refreshIntegrationStatus()
 
-        XCTAssertTrue(state.integrationSummary.contains("не установлен"))
+        XCTAssertTrue(state.integrationSummary.contains("автозахват выключен"))
 
         _ = state.installOpenCodeIntegration()
         XCTAssertTrue(state.integrationSummary.contains("mcp_token"))
