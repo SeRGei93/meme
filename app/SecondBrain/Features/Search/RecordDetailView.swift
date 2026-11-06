@@ -17,6 +17,7 @@ struct RecordDetailView: View {
     @State private var rawSearching = false
     @State private var showFullRawText = false
     @State private var showAllMatches = false
+    @State private var showAllKeywords = false
     @State private var rawPreviewText = ""
     @State private var rawLength = 0
     @State private var copied = false
@@ -149,7 +150,12 @@ struct RecordDetailView: View {
     }
 
     private var keywordsSection: some View {
-        section("Ключевые слова") {
+        let visible = showAllKeywords
+            ? card.keywords
+            : Array(card.keywords.prefix(Self.keywordPreviewLimit))
+        let hidden = card.keywords.count - visible.count
+
+        return section("Ключевые слова") {
             if card.keywords.isEmpty {
                 emptyText("Ключевых слов нет")
             } else {
@@ -158,7 +164,7 @@ struct RecordDetailView: View {
                     alignment: .leading,
                     spacing: 6
                 ) {
-                    ForEach(card.keywords, id: \.self) { keyword in
+                    ForEach(Array(visible.enumerated()), id: \.offset) { _, keyword in
                         Text(keyword)
                             .font(.caption)
                             .padding(.horizontal, 8)
@@ -167,9 +173,24 @@ struct RecordDetailView: View {
                     }
                 }
                 .accessibilityIdentifier("record.keywords")
+
+                if card.keywords.count > Self.keywordPreviewLimit {
+                    Button(showAllKeywords ? "Свернуть" : "Ещё \(hidden)") {
+                        showAllKeywords.toggle()
+                    }
+                    .controlSize(.small)
+                    .accessibilityLabel(
+                        showAllKeywords
+                            ? "Свернуть ключевые слова"
+                            : "Показать все ключевые слова"
+                    )
+                    .accessibilityIdentifier("record.keywords.more")
+                }
             }
         }
     }
+
+    private static let keywordPreviewLimit = 10
 
     private var atomsSection: some View {
         section("Атомы") {

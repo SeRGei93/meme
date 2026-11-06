@@ -48,6 +48,14 @@ func TestBuildMessagesIncludesMetadataAndSessionText(t *testing.T) {
 	if !strings.Contains(system, "\"questions\"") {
 		t.Errorf("system prompt does not describe the JSON schema:\n%s", system)
 	}
+	if !strings.Contains(system, "5-10 high-signal terms") {
+		t.Errorf("system prompt does not bound the keyword list:\n%s", system)
+	}
+	for _, rule := range []string{"Use lowercase", "overlapping forms", "never repeat"} {
+		if !strings.Contains(system, rule) {
+			t.Errorf("system prompt does not contain keyword rule %q:\n%s", rule, system)
+		}
+	}
 
 	user := messages[1].Content
 	for _, want := range []string{
