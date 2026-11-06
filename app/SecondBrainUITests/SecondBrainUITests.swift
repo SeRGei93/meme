@@ -510,6 +510,42 @@ final class SecondBrainUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["dashboard.recordsTotal"].waitForExistence(timeout: 15))
     }
 
+    func testRecordDetailCapsLongKeywordList() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiQuery: "Jarvis"
+        )
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["record.title"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.staticTexts["record.title"].value as? String, "Jarvis SQLite notes")
+        XCTAssertTrue(app.staticTexts["jarvis"].exists)
+        XCTAssertTrue(app.staticTexts["session"].exists)
+        XCTAssertFalse(app.staticTexts["extra-1"].exists)
+
+        let more = app.buttons["record.keywords.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        XCTAssertEqual(more.label, "Показать все ключевые слова")
+        more.click()
+
+        XCTAssertTrue(app.staticTexts["extra-1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["extra-2"].exists)
+        XCTAssertEqual(app.buttons["record.keywords.more"].label, "Свернуть ключевые слова")
+    }
+
+    func testHiddenKeywordStillFindsTheRecord() throws {
+        let app = configuredApp(
+            uiToken: "sb_ui_test",
+            mockAPI: true,
+            uiQuery: "extra-1"
+        )
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["record.title"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.staticTexts["record.title"].value as? String, "Jarvis SQLite notes")
+    }
+
     func testSearchScreenIsUsableInLightAppearance() throws {
         let app = configuredApp()
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]

@@ -41,7 +41,11 @@ Card rules:
 - title: one short line naming the session.
 - summary: 3-6 sentences covering what was asked, what was done and how it ended.
 - questions: 5-10 questions a person would use to find this session later.
-- keywords: all word forms, synonyms, file names, libraries and command names worth matching.
+- keywords: 5-10 high-signal terms a person would type to find this session later.
+  Use only technologies, products, error codes, unique file/function names and domain terms.
+  Do not include word forms, synonyms, overlapping forms of the same word (migration/migrations),
+  generic words or one-off commands. Use lowercase, never repeat the same concept and prefer
+  terms that are not already obvious from the title.
 - atoms: verbatim facts, decisions, errors, commands and flags.
 - Write in the language of the session content.`
 

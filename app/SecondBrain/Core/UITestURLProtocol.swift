@@ -101,7 +101,11 @@ final class UITestURLProtocol: URLProtocol {
             "title": "Jarvis SQLite notes",
             "summary": "SQLite migration ordering memo.",
             "questions": ["How should migrations be ordered?"],
-            "keywords": ["sqlite", "ordering"],
+            "keywords": [
+                "jarvis", "sqlite", "notes", "migration", "ordering",
+                "fts5", "memory", "knowledge", "searchable", "session",
+                "extra-1", "extra-2",
+            ],
             "atoms": ["Numeric prefixes keep migrations stable."],
             "is_final": true,
             "started_at": "2026-11-04T10:00:00Z",

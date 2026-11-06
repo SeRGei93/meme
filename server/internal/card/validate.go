@@ -18,6 +18,11 @@ import (
 //go:embed schema.json
 var schemaJSON []byte
 
+// maxCardKeywords is the hard cap after deduplication. The schema allows a bit
+// more so a model that repeats a term is normalized instead of failing the
+// whole card.
+const maxCardKeywords = 12
+
 var compiledSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 	compiler := jsonschema.NewCompiler()
 	if err := compiler.AddResource("card.schema.json", bytes.NewReader(schemaJSON)); err != nil {
@@ -74,7 +79,7 @@ func Validate(raw []byte) (ingest.Card, error) {
 	if card.Questions, err = normalizeList("questions", payload.Questions); err != nil {
 		return ingest.Card{}, err
 	}
-	if card.Keywords, err = normalizeList("keywords", payload.Keywords); err != nil {
+	if card.Keywords, err = normalizeKeywords(payload.Keywords); err != nil {
 		return ingest.Card{}, err
 	}
 	if card.Atoms, err = normalizeList("atoms", payload.Atoms); err != nil {
@@ -92,6 +97,31 @@ func stripCodeFence(value string) string {
 		return value
 	}
 	return strings.TrimSpace(strings.TrimSuffix(rest, "```"))
+}
+
+// normalizeKeywords trims, removes case-insensitive duplicates and caps the
+// list. Keywords are search aids, not tags: a long list dilutes both the card
+// and the search UI.
+func normalizeKeywords(values []string) ([]string, error) {
+	normalized := make([]string, 0, min(len(values), maxCardKeywords))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		keyword := strings.ToLower(strings.TrimSpace(value))
+		if keyword == "" {
+			return nil, fmt.Errorf("card keywords must not contain blank items")
+		}
+		if _, ok := seen[keyword]; ok {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		if len(normalized) < maxCardKeywords {
+			normalized = append(normalized, keyword)
+		}
+	}
+	if len(normalized) < 4 {
+		return nil, fmt.Errorf("card keywords must contain at least 4 unique items")
+	}
+	return normalized, nil
 }
 
 func normalizeList(field string, values []string) ([]string, error) {

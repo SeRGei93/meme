@@ -111,8 +111,17 @@ func TestValidateRejectsInvalidCards(t *testing.T) {
 			wantErr: "questions",
 		},
 		{
-			name:    "empty keyword",
-			mutate:  func(m map[string]any) { m["keywords"] = []string{"sqlite", ""} },
+			name: "too few keywords",
+			mutate: func(m map[string]any) {
+				m["keywords"] = []string{"sqlite", "migrations", "ordering"}
+			},
+			wantErr: "keywords",
+		},
+		{
+			name: "empty keyword",
+			mutate: func(m map[string]any) {
+				m["keywords"] = []string{"sqlite", "migrations", "ordering", "lexicographic", ""}
+			},
 			wantErr: "keywords",
 		},
 		{
@@ -154,6 +163,84 @@ func TestValidateRejectsInvalidCards(t *testing.T) {
 				t.Errorf("Validate() error = %q, want mention of %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateRejectsMoreThanSixteenKeywordsAtSchemaLevel(t *testing.T) {
+	raw := mutateCardJSON(t, func(m map[string]any) {
+		keywords := make([]string, 17)
+		for i := range keywords {
+			keywords[i] = "keyword-" + string(rune('a'+i))
+		}
+		m["keywords"] = keywords
+	})
+
+	if _, err := card.Validate([]byte(raw)); err == nil {
+		t.Fatal("Validate() error = nil, want the schema to reject 17 keywords")
+	} else if !strings.Contains(err.Error(), "maxItems") {
+		t.Fatalf("Validate() error = %v, want a schema maxItems error", err)
+	}
+}
+
+func TestValidateAcceptsFourUniqueKeywordsAfterDeduplication(t *testing.T) {
+	raw := mutateCardJSON(t, func(m map[string]any) {
+		m["keywords"] = []string{"SQLite", "sqlite", "migrations", "ordering", "lexer"}
+	})
+
+	got, err := card.Validate([]byte(raw))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(got.Keywords) != 4 {
+		t.Fatalf("Keywords = %v, want 4 after deduplication", got.Keywords)
+	}
+}
+
+func TestValidateDeduplicatesKeywordsAndKeepsInputOrder(t *testing.T) {
+	raw := mutateCardJSON(t, func(m map[string]any) {
+		m["keywords"] = []string{" SQLite ", "sqlite", "migrations", "ordering", "lexer", "prefix"}
+	})
+
+	got, err := card.Validate([]byte(raw))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	want := []string{"sqlite", "migrations", "ordering", "lexer", "prefix"}
+	if len(got.Keywords) != len(want) {
+		t.Fatalf("Keywords = %v, want %v", got.Keywords, want)
+	}
+	for i := range want {
+		if got.Keywords[i] != want[i] {
+			t.Errorf("Keywords[%d] = %q, want %q", i, got.Keywords[i], want[i])
+		}
+	}
+}
+
+func TestValidateDeduplicatesAndCapsKeywords(t *testing.T) {
+	raw := mutateCardJSON(t, func(m map[string]any) {
+		m["keywords"] = []string{
+			"SQLite", "sqlite", "migrations", "ordering", "lexicographic",
+			"prefix", "runner", "schema", "migration", "index",
+			"test", "regression", "duplicate", "extra", "more", "overflow",
+		}
+	})
+
+	got, err := card.Validate([]byte(raw))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(got.Keywords) != 12 {
+		t.Fatalf("Keywords length = %d, want 12", len(got.Keywords))
+	}
+	if got.Keywords[0] != "sqlite" {
+		t.Errorf("Keywords[0] = %q, want lowercased sqlite", got.Keywords[0])
+	}
+	for i, keyword := range got.Keywords {
+		for j := i + 1; j < len(got.Keywords); j++ {
+			if keyword == got.Keywords[j] {
+				t.Errorf("duplicate keyword %q at %d and %d", keyword, i, j)
+			}
+		}
 	}
 }
 
